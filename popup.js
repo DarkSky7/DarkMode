@@ -1,7 +1,7 @@
 /* DarkMode popup — ask once, remember optionally. */
 'use strict';
 
-const VERSION = '0.1.0';
+const VERSION = '0.1.1';
 document.getElementById('ver').textContent = 'v' + VERSION;
 
 async function currentTab() {
@@ -15,7 +15,26 @@ function hostOf(tab) {
 
 async function sendTab(tab, msg) {
   try { return await chrome.tabs.sendMessage(tab.id, msg); }
-  catch (e) { return null; } // no content script (chrome://, store, ...)
+  catch (e) { return null; } // no content script yet (pre-extension tab, SPA hop)
+}
+
+/* MV3 does not inject content scripts into tabs that were open BEFORE the
+   extension loaded. Fallback: inject on demand (activeTab covers this tab
+   because the user just clicked the icon), then retry the message. */
+async function ensureContent(tab) {
+  try {
+    await chrome.scripting.insertCSS({ target: { tabId: tab.id }, files: ['content.css'] });
+    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] });
+    return true;
+  } catch (e) { return false; }
+}
+
+async function askTab(tab, msg) {
+  let res = await sendTab(tab, msg);
+  if (res === null && /^https?:/.test(tab.url || '')) {
+    if (await ensureContent(tab)) res = await sendTab(tab, msg); // retry once
+  }
+  return res;
 }
 
 const btn = document.getElementById('btn-toggle');
@@ -43,13 +62,13 @@ async function refresh() {
   document.getElementById('host').textContent = host ? 'on ' + host : 'no web page';
   document.getElementById('host2').textContent = host || 'this site';
   if (!host) { render(null, false); return; }
-  const state = await sendTab(tab, { type: 'dmGetState' });
+  const state = await askTab(tab, { type: 'dmGetState' });
   const bg = await chrome.runtime.sendMessage({ type: 'getHostState', host });
   render(state, bg && bg.remembered);
 }
 
 btn.addEventListener('click', async () => {
-  const state = await sendTab(tab, { type: 'dmToggle' });
+  const state = await askTab(tab, { type: 'dmToggle' });
   render(state, remChk.checked);
   hint.textContent = state && state.dark
     ? 'Darkened for this visit. Check below to remember ' + host + '.'
@@ -62,7 +81,7 @@ remChk.addEventListener('change', async () => {
   remNote.hidden = !want;
   if (want) {
     // remembering implies dark now
-    const state = await sendTab(tab, { type: 'dmSetDark', dark: true });
+    const state = await askTab(tab, { type: 'dmSetDark', dark: true });
     render(state, true);
   }
   hint.textContent = want
