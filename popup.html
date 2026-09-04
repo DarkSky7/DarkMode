@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <span class="logo">◑ <b>DarkMode</b></span>
+    <span id="ver" class="ver"></span>
+  </header>
+
+  <div id="host" class="host"></div>
+
+  <button id="btn-toggle" class="big">🌙 Darken this page</button>
+  <div id="hint" class="hint">Applies now. Nothing is remembered until you check below.</div>
+
+  <label class="remember">
+    <input type="checkbox" id="remember">
+    <span>Always dark on <b id="host2"></b></span>
+  </label>
+  <div id="remember-note" class="note" hidden>Will auto-darken on future visits. Uncheck to stop.</div>
+
+  <footer>Does nothing until asked.</footer>
+  <script src="popup.js"></script>
+</body>
+</html>

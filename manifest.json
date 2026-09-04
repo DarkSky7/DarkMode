@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "DarkMode — resistant-site darkener",
+  "version": "0.1.0",
+  "description": "Does nothing until asked. Click the toolbar icon on a site that resists dark mode to darken it; optionally remember the site so it auto-darkens on future visits.",
+  "permissions": ["storage", "activeTab"],
+  "background": { "service_worker": "background.js" },
+  "action": {
+    "default_title": "DarkMode",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "css": ["content.css"],
+      "run_at": "document_start"
+    }
+  ]
+}
