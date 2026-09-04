@@ -47,10 +47,15 @@ def main() -> int:
     print(f"staged {len(FILES)} files -> {stage}")
 
     def write_zip(path: Path):
+        # AMO + about:debugging both require manifest.json at the ARCHIVE ROOT
+        # (a version-prefix folder like "DarkMode-1.0.0/manifest.json" is
+        # rejected: "The package file must be a ZIP of the extension's files
+        # themselves"). Entries are the bare filenames; the staging FOLDER keeps
+        # its versioned name only for Load-unpacked.
         with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
             for f in FILES:
                 data = (stage / f).read_bytes()
-                info = zipfile.ZipInfo(f"DarkMode-{ver}/{f}", date_time=(2020, 1, 1, 0, 0, 0))
+                info = zipfile.ZipInfo(f, date_time=(2020, 1, 1, 0, 0, 0))
                 info.compress_type = zipfile.ZIP_DEFLATED
                 z.writestr(info, data)
 
