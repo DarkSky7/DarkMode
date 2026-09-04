@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
-"""Package DarkMode for Chromium install: clean staging dir + reproducible zip.
+"""Package DarkMode for distribution: clean staging dir + reproducible zip/xpi.
 
 Usage: python scripts/package.py [version]   (default: reads manifest.json)
 
-Output:
-  dist/DarkMode-<ver>/    <- point "Load unpacked" here (clean, no repo junk)
-  dist/DarkMode-<ver>.zip <- archive copy (forward slashes, fixed timestamps)
+Output (byte-identical zip == xpi, forward slashes, fixed timestamps):
+  dist/DarkMode-<ver>/      <- point "Load unpacked" here (Chromium)
+  dist/DarkMode-<ver>.zip   <- Chromium/archive distribution
+  dist/DarkMode-<ver>.xpi   <- AMO (Firefox/Zen) — same bytes, .xpi name
+Prints the MD5 of both packages (they must match).
 """
+import hashlib
 import json
 import shutil
 import sys
@@ -24,6 +27,10 @@ FILES = [
     "popup.html",
     "popup.css",
     "popup.js",
+    "icons/icon16.png",
+    "icons/icon32.png",
+    "icons/icon48.png",
+    "icons/icon128.png",
 ]
 
 
@@ -34,17 +41,27 @@ def main() -> int:
         shutil.rmtree(stage)
     stage.mkdir(parents=True)
     for f in FILES:
-        shutil.copy2(ROOT / f, stage / f)
+        dst = stage / f
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / f, dst)
     print(f"staged {len(FILES)} files -> {stage}")
 
+    def write_zip(path: Path):
+        with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+            for f in FILES:
+                data = (stage / f).read_bytes()
+                info = zipfile.ZipInfo(f"DarkMode-{ver}/{f}", date_time=(2020, 1, 1, 0, 0, 0))
+                info.compress_type = zipfile.ZIP_DEFLATED
+                z.writestr(info, data)
+
     zpath = DIST / f"DarkMode-{ver}.zip"
-    with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as z:
-        for f in FILES:
-            data = (stage / f).read_bytes()
-            info = zipfile.ZipInfo(f"DarkMode-{ver}/{f}", date_time=(2020, 1, 1, 0, 0, 0))
-            info.compress_type = zipfile.ZIP_DEFLATED
-            z.writestr(info, data)
-    print(f"zip    -> {zpath}")
+    xpath = DIST / f"DarkMode-{ver}.xpi"
+    write_zip(zpath)
+    shutil.copyfile(zpath, xpath)
+    md5 = hashlib.md5(zpath.read_bytes()).hexdigest()
+    print(f"zip -> {zpath}")
+    print(f"xpi -> {xpath}")
+    print(f"MD5  {md5}  (zip == xpi)")
     return 0
 
 
