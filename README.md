@@ -20,18 +20,21 @@ reach. Optionally *remember* a site so it auto-darkens on future visits.
 
 ## Engine
 
-Filter inversion (`html.cr-dark { filter: invert(1) hue-rotate(180deg) }`) +
-double-inversion of `img / picture / video / canvas / iframe / embed / object /
-svg image` so photos and embedded content keep natural colors on the dark
-page. Gated entirely on an `<html>` class the content script adds — the rules
+Color-wheel inversion (`html.cr-dark { filter: invert(1) }`): white→black,
+black→white, every hue → its complement (red↔cyan, yellow↔blue) — the flip
+that reaches inline styles, canvases and `color-scheme: light` lock-ins that
+polite per-element theming can't. **Pictures are exempt**: `img / picture /
+video / canvas / iframe / embed / object / svg image` are inverted back to
+natural colors. No hue-rotate, no forced root background (user spec
+2026-09-04 — a forced background under the filter would invert into a light
+wash). Gated entirely on an `<html>` class the content script adds — the rules
 are inert without it.
 
 Known trade-offs of the filter tactic (accepted for the resistant case):
 - `position: fixed` headers can misbehave (a filter on the root makes them
   behave like their containing block) — cosmetic on most pages.
-- Canvas/webgl apps (e.g. embedded Studio) are inverted as a whole, which is
-  the point for a light app, but hues shift — hue-rotate(180deg) restores the
-  common case.
+- Canvas/webgl apps (e.g. embedded Studio) are inverted as a whole; hues land
+  on complements, which is the requested wheel-flip behavior for a light app.
 - Screenshots/screen-share of the page will capture the dark rendering.
 
 ## Install (daily Chromium — permanent)

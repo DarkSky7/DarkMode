@@ -1,7 +1,7 @@
 /* DarkMode popup — ask once, remember optionally. */
 'use strict';
 
-const VERSION = '0.1.1';
+const VERSION = '0.1.2';
 document.getElementById('ver').textContent = 'v' + VERSION;
 
 async function currentTab() {
@@ -45,7 +45,7 @@ let tab = null, host = '';
 
 function render(state, remembered) {
   const dark = !!(state && state.dark);
-  btn.textContent = dark ? '☀️ Lighten this page' : '🌙 Darken this page';
+  btn.textContent = dark ? '☀️ Disable Dark Mode override' : '🌙 Darken this page';
   btn.classList.toggle('on', dark);
   remChk.checked = !!remembered;
   remNote.hidden = !remembered;
@@ -72,7 +72,7 @@ btn.addEventListener('click', async () => {
   render(state, remChk.checked);
   hint.textContent = state && state.dark
     ? 'Darkened for this visit. Check below to remember ' + host + '.'
-    : 'Reverted for this visit.';
+    : 'Dark Mode override disabled for this visit.';
 });
 
 remChk.addEventListener('change', async () => {

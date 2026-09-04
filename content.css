@@ -1,13 +1,13 @@
 /* DarkMode engine styles — gated on <html class="cr-dark">.
    Nothing applies until the content script adds the class.
-   Filter inversion + hue-rotate is the resistant-case tactic: it flips inline
-   styles, canvases and fixed backgrounds that element-level theming misses.
-   Media (img/picture/video/canvas/svg-image) and iframes are double-inverted
-   back to their original colors so photos stay natural inside the dark page. */
+   COLOR-WHEEL INVERSION: invert(1) maps white→black, black→white, and every
+   hue to its complement (red↔cyan, yellow↔blue). NO hue-rotate (user spec,
+   2026-09-04) and NO forced background on the filtered element — a background
+   set here would itself be inverted into a light wash.
+   Media (img/picture/video/canvas/svg-image) and iframes are inverted back so
+   pictures stay natural inside the dark page. */
 html.cr-dark {
-  filter: invert(1) hue-rotate(180deg) !important;
-  background: #0b0f17 !important;
-  color-scheme: dark !important;
+  filter: invert(1) !important;
 }
 
 /* revert media + embedded frames so they do not look like film negatives */
@@ -19,14 +19,11 @@ html.cr-dark iframe,
 html.cr-dark embed,
 html.cr-dark object,
 html.cr-dark svg image {
-  filter: invert(1) hue-rotate(180deg) !important;
+  filter: invert(1) !important;
 }
 
-/* smooth the inversion artifacts: dark scrollbars + selection */
+/* smooth the inversion artifacts: dark scrollbars (not part of the doc, so
+   they are NOT inverted — style them directly for the dark page) */
 html.cr-dark ::-webkit-scrollbar { background: #0b0f17; }
 html.cr-dark ::-webkit-scrollbar-thumb { background: #263046; }
-html.cr-dark ::selection { background: #b57f00 !important; color: #0b0f17 !important; }
 
-/* avoid double-inverting our own popup-ish overlays if the page embeds
-   light-on-dark widgets that declare their own scheme */
-html.cr-dark * { border-color: rgba(128, 128, 128, 0.35) !important; }
