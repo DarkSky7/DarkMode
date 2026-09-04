@@ -4,6 +4,8 @@ Route: **AMO Developer Hub, web UI, UNLISTED self-distribution** (AMO signs;
 we host the .xpi in GitHub Releases + fleet pages). Account: Michael Landis
 (personal — matches the SSRN publishing identity). License: MPL-2.0.
 Homepage/support: the product's own repo — `https://github.com/DarkSky7/DarkMode`.
+**Decision (2026-09-04, Mike): Chrome Web Store NOT targeted — AMO unlisted
+only (free, matches the Zen/Firefox install base).**
 
 ## Listing fields
 
