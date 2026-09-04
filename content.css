@@ -1,13 +1,15 @@
 /* DarkMode engine styles — gated on <html class="cr-dark">.
    Nothing applies until the content script adds the class.
    COLOR-WHEEL INVERSION: invert(1) maps white→black, black→white, and every
-   hue to its complement (red↔cyan, yellow↔blue). NO hue-rotate (user spec,
-   2026-09-04) and NO forced background on the filtered element — a background
-   set here would itself be inverted into a light wash.
-   Media (img/picture/video/canvas/svg-image) and iframes are inverted back so
-   pictures stay natural inside the dark page. */
+   hue to its complement (red↔cyan, yellow↔blue). NO hue-rotate (user spec).
+   The forced WHITE root background is load-bearing: pages like Foxglove's
+   docs paint nothing on html/body — their white is the browser canvas BEHIND
+   the page, which no filter can reach. White on the root inverts to black,
+   covering that canvas (measured 2026-09-04: 86% of pixels → black vs 10%
+   without it). A dark root background would invert INTO a light wash. */
 html.cr-dark {
   filter: invert(1) !important;
+  background: #ffffff !important;
 }
 
 /* revert media + embedded frames so they do not look like film negatives */
