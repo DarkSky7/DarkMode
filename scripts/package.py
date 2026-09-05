@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """Package DarkMode for distribution: clean staging dir + reproducible zip/xpi.
 
-Usage: python scripts/package.py [version]   (default: reads manifest.json)
+Chrome-family MV3 rejects `background.scripts`, Firefox 121+/Zen wants the dual
+(scripts + service_worker) shape — so the package is split by flavor:
 
-Output (byte-identical zip == xpi, forward slashes, fixed timestamps):
-  dist/DarkMode-<ver>/      <- point "Load unpacked" here (Chromium)
-  dist/DarkMode-<ver>.zip   <- Chromium/archive distribution
-  dist/DarkMode-<ver>.xpi   <- AMO (Firefox/Zen) — same bytes, .xpi name
-Prints the MD5 of both packages (they must match).
+  manifest.json (canonical, repo + "Load unpacked") = Chromium: service_worker only
+  dist/DarkMode-<ver>/        <- point Chromium "Load unpacked" here
+  dist/DarkMode-<ver>.zip     <- Chromium / archive distribution
+  dist/DarkMode-<ver>.xpi     <- Firefox / Zen / AMO — dual background shape
+
+Usage: python scripts/package.py [version]   (default: reads manifest.json)
+Prints the MD5 of each package (zip != xpi by design; flavors differ).
 """
 import hashlib
 import json
@@ -38,8 +41,30 @@ FILES = [
 ]
 
 
+def firefox_manifest_bytes() -> bytes:
+    """Firefox/Zen flavor: dual background (scripts + service_worker)."""
+    m = json.loads((ROOT / "manifest.json").read_text())
+    m["background"] = {"scripts": ["background.js"], "service_worker": "background.js"}
+    return json.dumps(m, indent=2, ensure_ascii=False).encode("utf-8")
+
+
+def write_zip(path: Path, manifest_override: bytes | None = None):
+    # AMO + about:debugging both require manifest.json at the ARCHIVE ROOT
+    # (a version-prefix folder like "DarkMode-1.0.0/manifest.json" is
+    # rejected). Entries are the bare filenames.
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        for f in FILES:
+            data = (stage / f).read_bytes()
+            if f == "manifest.json" and manifest_override is not None:
+                data = manifest_override
+            info = zipfile.ZipInfo(f, date_time=(2020, 1, 1, 0, 0, 0))
+            info.compress_type = zipfile.ZIP_DEFLATED
+            z.writestr(info, data)
+
+
 def main() -> int:
     ver = sys.argv[1] if len(sys.argv) > 1 else json.loads((ROOT / "manifest.json").read_text())["version"]
+    global stage
     stage = DIST / f"DarkMode-{ver}"
     if stage.exists():
         shutil.rmtree(stage)
@@ -48,29 +73,16 @@ def main() -> int:
         dst = stage / f
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT / f, dst)
+    # also stage the Firefox flavor manifest (handy for Zen load-unpacked)
+    (stage / "manifest.firefox.json").write_bytes(firefox_manifest_bytes())
     print(f"staged {len(FILES)} files -> {stage}")
 
-    def write_zip(path: Path):
-        # AMO + about:debugging both require manifest.json at the ARCHIVE ROOT
-        # (a version-prefix folder like "DarkMode-1.0.0/manifest.json" is
-        # rejected: "The package file must be a ZIP of the extension's files
-        # themselves"). Entries are the bare filenames; the staging FOLDER keeps
-        # its versioned name only for Load-unpacked.
-        with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
-            for f in FILES:
-                data = (stage / f).read_bytes()
-                info = zipfile.ZipInfo(f, date_time=(2020, 1, 1, 0, 0, 0))
-                info.compress_type = zipfile.ZIP_DEFLATED
-                z.writestr(info, data)
-
-    zpath = DIST / f"DarkMode-{ver}.zip"
-    xpath = DIST / f"DarkMode-{ver}.xpi"
+    zpath = DIST / f"DarkMode-{ver}.zip"   # Chromium
+    xpath = DIST / f"DarkMode-{ver}.xpi"   # Firefox / Zen / AMO
     write_zip(zpath)
-    shutil.copyfile(zpath, xpath)
-    md5 = hashlib.md5(zpath.read_bytes()).hexdigest()
-    print(f"zip -> {zpath}")
-    print(f"xpi -> {xpath}")
-    print(f"MD5  {md5}  (zip == xpi)")
+    write_zip(xpath, manifest_override=firefox_manifest_bytes())
+    for p in (zpath, xpath):
+        print(f"{p.name}: MD5 {hashlib.md5(p.read_bytes()).hexdigest()}  ({p.stat().st_size} bytes)")
     return 0
 
 
