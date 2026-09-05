@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "DarkMode — resistant-site darkener",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Does nothing until asked. Click the toolbar icon on a site that resists dark mode to darken it; optionally remember the site so it auto-darkens on future visits.",
   "permissions": ["storage", "activeTab", "scripting"],
   "background": {
@@ -12,10 +12,10 @@
     "default_title": "DarkMode",
     "default_popup": "popup.html",
     "default_icon": {
-      "16": "icons/icon16.png",
-      "32": "icons/icon32.png",
-      "48": "icons/icon48.png",
-      "128": "icons/icon128.png"
+      "16": "icons/sun16.png",
+      "32": "icons/sun32.png",
+      "48": "icons/sun48.png",
+      "128": "icons/sun128.png"
     }
   },
   "icons": {

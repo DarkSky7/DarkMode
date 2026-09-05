@@ -31,6 +31,10 @@ FILES = [
     "icons/icon32.png",
     "icons/icon48.png",
     "icons/icon128.png",
+    "icons/sun16.png",
+    "icons/sun32.png",
+    "icons/sun48.png",
+    "icons/sun128.png",
 ]
 
 

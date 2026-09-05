@@ -9,7 +9,7 @@
    content.css and do nothing until the class exists. */
 (function () {
   'use strict';
-  const VERSION = '1.0.1';
+  const VERSION = '1.0.2';
   const HOST = location.hostname.replace(/^www\./, '');
 
   if (window.top !== window) return; // frames: parent handles the page
@@ -21,19 +21,34 @@
   function revert() { document.documentElement.classList.remove(KEY); }
   function isDark() { return document.documentElement.classList.contains(KEY); }
 
+  /* tell the background which toolbar icon to show for this tab */
+  function report() {
+    try { chrome.runtime.sendMessage({ type: 'dmHostState', host: HOST, dark: isDark() }); } catch (e) {}
+  }
+
   /* remembered sites: apply ASAP (documentElement exists at document_start) */
   try {
     chrome.storage.sync.get('darkHosts', (got) => {
       const hosts = got.darkHosts || {};
-      if (hosts[HOST] || hosts['*']) apply();
+      if (hosts[HOST] || hosts['*']) { apply(); report(); }
     });
   } catch (e) { /* storage unavailable (chrome:// etc.) — stay inert */ }
+
+  /* remember-toggled while this tab is open: apply if now remembered (never
+     auto-revert a manual darken — that state is the user's call) */
+  try {
+    chrome.storage.onChanged.addListener((ch, area) => {
+      if (area !== 'sync' || !ch.darkHosts) return;
+      const hosts = (ch.darkHosts.newValue) || {};
+      if ((hosts[HOST] || hosts['*']) && !isDark()) { apply(); report(); }
+    });
+  } catch (e) {}
 
   /* popup asks */
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg.type === 'dmGetState') { sendResponse({ dark: isDark(), host: HOST, v: VERSION }); }
-    else if (msg.type === 'dmSetDark') { (msg.dark ? apply : revert)(); sendResponse({ dark: isDark() }); }
-    else if (msg.type === 'dmToggle') { isDark() ? revert() : apply(); sendResponse({ dark: isDark() }); }
+    else if (msg.type === 'dmSetDark') { (msg.dark ? apply : revert)(); report(); sendResponse({ dark: isDark() }); }
+    else if (msg.type === 'dmToggle') { isDark() ? revert() : apply(); report(); sendResponse({ dark: isDark() }); }
     else sendResponse({});
     return false;
   });
