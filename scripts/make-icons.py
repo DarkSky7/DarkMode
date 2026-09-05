@@ -35,19 +35,19 @@ def sample(S: int, x: float, y: float, sun: bool) -> tuple:
     """Return RGBA at pixel-center coords in a 0..S canvas."""
     if sun:
         cx = cy = 0.5 * S
-        r = 0.30 * S          # disc radius
+        r = 0.35 * S          # disc radius (larger presence)
         dx, dy = x - cx, y - cy
         d = math.hypot(dx, dy)
         if d <= r:
             return AMBER + (255,)
-        ri, ro = 0.36 * S, 0.48 * S          # rays span
+        ri, ro = 0.41 * S, 0.4975 * S     # rays span (out to the edge)
         if ri <= d <= ro:
             ang = math.atan2(dy, dx)
             # 8 rays, first pointing up
             k = round((ang + math.pi / 2) / (math.pi / 4))
             ca = -math.pi / 2 + k * math.pi / 4
             diff = abs((ang - ca + math.pi) % (2 * math.pi) - math.pi)
-            if diff <= 0.105:                 # angular half-width
+            if diff <= 0.12:              # angular half-width (thicker rays)
                 return AMBER + (255,)
         return (0, 0, 0, 0)
     # crescent: amber disc minus offset cutout

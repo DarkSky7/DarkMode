@@ -49,13 +49,7 @@ only (free, matches the Zen/Firefox install base).**
 
 ## Version notes (1.0.0)
 
-- First public release.
-- Color-wheel inversion engine proven against the resistant case
-  (foxglove.dev docs): forced white root background under `invert(1)` covers
-  transparent-root pages (the v0.1.x lesson — measured 86% of pixels → black).
-- On-demand injection so the icon works on tabs open before install/update.
-- Remembered-site allowlist (storage.sync), per-visit toggle, active button =
-  "Disable Dark Mode override".
+s
 
 ## AMO submission steps (one-time + per version)
 

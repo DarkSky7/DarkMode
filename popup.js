@@ -1,7 +1,7 @@
 /* DarkMode popup — ask once, remember optionally. */
 'use strict';
 
-const VERSION = '1.0.1';
+const VERSION = '1.0.3';
 document.getElementById('ver').textContent = 'v' + VERSION;
 
 async function currentTab() {
@@ -38,6 +38,7 @@ async function askTab(tab, msg) {
 }
 
 const btn = document.getElementById('btn-toggle');
+const forceBtn = document.getElementById('btn-force');
 const remChk = document.getElementById('remember');
 const hint = document.getElementById('hint');
 const remNote = document.getElementById('remember-note');
@@ -45,14 +46,23 @@ let tab = null, host = '';
 
 function render(state, remembered) {
   const dark = !!(state && state.dark);
-  btn.textContent = dark ? '☀️ Disable Dark Mode override' : '🌙 Darken this page';
+  const alreadyDark = !!(state && !dark && state.tone === 'dark');
+  btn.disabled = alreadyDark || !state;
+  btn.textContent = dark ? '☀️ Disable Dark Mode override'
+    : alreadyDark ? '☀️ Page already dark' : '🌙 Darken this page';
   btn.classList.toggle('on', dark);
+  forceBtn.hidden = !alreadyDark;
   remChk.checked = !!remembered;
+  remChk.disabled = !state || alreadyDark;
   remNote.hidden = !remembered;
   if (!state) {
-    btn.disabled = true;
-    btn.textContent = '🌙 Not available here';
     hint.textContent = 'This page cannot be darkened (browser-internal or store page).';
+  } else if (alreadyDark) {
+    hint.textContent = 'This page is already dark (native or another extension) — inverting it would fake the original light look. Use "invert anyway" only if it looks light to you.';
+  } else if (!dark) {
+    hint.textContent = 'Applies now. Nothing is remembered until you check below.';
+  } else {
+    hint.textContent = 'Darkened for this visit. Check below to remember ' + host + '.';
   }
 }
 
@@ -72,7 +82,17 @@ btn.addEventListener('click', async () => {
   render(state, remChk.checked);
   hint.textContent = state && state.dark
     ? 'Darkened for this visit. Check below to remember ' + host + '.'
-    : 'Dark Mode override disabled for this visit.';
+    : state && state.alreadyDark
+      ? 'Already dark — nothing inverted.'
+      : 'Dark Mode override disabled for this visit.';
+});
+
+forceBtn.addEventListener('click', async () => {
+  const state = await askTab(tab, { type: 'dmSetDark', dark: true, force: true });
+  render(state, remChk.checked);
+  hint.textContent = state && state.dark
+    ? 'Darkened anyway (forced).'
+    : 'Still light — this page overrides the attempt.';
 });
 
 remChk.addEventListener('change', async () => {
