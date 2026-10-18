@@ -42,9 +42,16 @@ FILES = [
 
 
 def firefox_manifest_bytes() -> bytes:
-    """Firefox/Zen flavor: dual background (scripts + service_worker)."""
+    """Firefox/Zen flavor: `background.scripts` only.
+
+    Firefox has no MV3 service-worker background, so it ignores
+    `background.service_worker`; AMO's validator warns about the orphaned key.
+    The `.zip` stays Chromium-flavored (service_worker only) and the `.xpi`
+    carries the Firefox shape, so each archive is exactly what its target
+    browser wants and AMO validation is clean.
+    """
     m = json.loads((ROOT / "manifest.json").read_text())
-    m["background"] = {"scripts": ["background.js"], "service_worker": "background.js"}
+    m["background"] = {"scripts": ["background.js"]}
     return json.dumps(m, indent=2, ensure_ascii=False).encode("utf-8")
 
 
