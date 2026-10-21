@@ -1,0 +1,113 @@
+name: Sync signed XPI from AMO
+
+# Listed add-ons are signed by Mozilla as part of review, and their signed files are
+# PUBLICLY downloadable from the AMO API (file.url on each version). So there is nothing to
+# submit here - re-submitting an existing version would just 409 Conflict. This workflow
+# instead fetches the signed package AMO already produced and commits it into signed/, so
+# the repo carries the exact bytes users install rather than only a reproducible build.
+#
+# Use this for LISTED add-ons. Unlisted add-ons need sign-release.yml instead, because
+# their signed files are not publicly fetchable and require AMO API credentials.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to fetch (blank = newest public version on AMO)'
+        required: false
+        default: ''
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: amo-sync-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch the newest public version descriptor from AMO
+        env:
+          ADDON_GUID: ${{ vars.ADDON_GUID }}
+          WANT: ${{ github.event.inputs.version }}
+        run: |
+          set -euo pipefail
+          GUID="${ADDON_GUID:-darkmode@landis.cc}"
+          echo "add-on: $GUID"
+          curl -sfL "https://addons.mozilla.org/api/v5/addons/addon/${GUID}/versions/?page_size=50" -o versions.json
+          python3 - <<'PY'
+          import json, os, re
+          want = (os.environ.get("WANT") or "").strip()
+          d = json.load(open("versions.json", encoding="utf-8"))
+
+          def key(v):
+              return tuple(int(p) for p in re.findall(r"\d+", v))
+
+          rows = []
+          for r in d.get("results", []):
+              f = r.get("file") or {}
+              if f.get("status") != "public" or not f.get("url"):
+                  continue
+              rows.append((key(r["version"]), r["version"], f["url"], f.get("size")))
+          if not rows:
+              raise SystemExit("no public signed version found on AMO")
+          rows.sort()
+          chosen = None
+          if want:
+              chosen = next((x for x in rows if x[1] == want), None)
+              if chosen is None:
+                  raise SystemExit("version %s not public on AMO; public: %s" % (want, [x[1] for x in rows]))
+          else:
+              chosen = rows[-1]
+          print("chosen %s (%s bytes)" % (chosen[1], chosen[3]))
+          with open("chosen.env", "w") as fh:
+              fh.write("VERSION=%s\nURL=%s\n" % (chosen[1], chosen[2]))
+          PY
+          cat chosen.env >> "$GITHUB_ENV"
+
+      - name: Download the signed package
+        run: |
+          set -euo pipefail
+          curl -sfL "$URL" -o packed.xpi
+          ls -l packed.xpi
+          file packed.xpi 2>/dev/null || true
+
+      - name: Verify it really is Mozilla-signed
+        run: |
+          set -euo pipefail
+          unzip -l packed.xpi | grep -E 'META-INF/(mozilla\.rsa|mozilla\.sf|manifest\.mf)' || {
+            echo "::error::No META-INF signature - refusing to commit an unsigned file"; exit 1; }
+          echo "signature present"
+
+      - name: Commit into signed/
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          mkdir -p signed
+          TARGET="signed/darkmode-${VERSION}.xpi"
+          cp packed.xpi "$TARGET"
+          ( cd signed && sha256sum "$(basename "$TARGET")" > "$(basename "$TARGET").sha256" )
+          cp packed.xpi signed/darkmode-latest.xpi
+          ( cd signed && sha256sum darkmode-latest.xpi > darkmode-latest.xpi.sha256 )
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add signed/
+          if git diff --cached --quiet; then
+            echo "signed artifact already committed for $VERSION - nothing to do"
+            exit 0
+          fi
+          git commit -m "sign: sync AMO-signed darkmode ${VERSION}
+
+          Downloaded the public signed package from AMO and committed it verbatim, with a
+          sha256 and a -latest copy. No submission was made: ${VERSION} was already signed
+          during review."
+          git push origin "HEAD:${DEFAULT_BRANCH}"
