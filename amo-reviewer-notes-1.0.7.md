@@ -60,11 +60,16 @@ The filter approach can misbehave with position: fixed headers on some pages,
 and page screenshots capture the darkened rendering.
 ```
 
-## Suggested listing description edit (not reviewer-facing)
+## Listing description edit — APPLIED 2026-10-28
 
-The public summary currently says *"Does nothing until asked"*, which is no
-longer literally true because of the Gmail case. Add one honest sentence to the
-detailed description:
+The public summary said *"Does nothing until asked"*, which stopped being
+literally true once Gmail began being corrected automatically. Mike's decision:
+make the description follow the code, not the reverse. Both fields are now
+updated in `amo-submission.md`:
+
+- **Summary (227 chars):** "Does nothing until asked, with one exception: Gmail,
+  which has its own dark theme and is never inverted. …"
+- **Detailed description:** gained the paragraph below.
 
 ```
 Gmail is the one exception: it already has a dark theme, so DarkMode never
@@ -72,5 +77,5 @@ inverts it. Instead, it silently corrects the few panels Gmail's dark theme
 leaves white, using colours taken from Gmail's own palette.
 ```
 
-Keeping the description and the code in agreement matters more than the
-marketing line.
+The code was NOT changed — the behaviour is right and narrow, and the listing
+now states it instead of hiding it behind an absolute claim.

@@ -10,10 +10,12 @@ only (free, matches the Zen/Firefox install base).**
 ## Listing fields
 
 - **Name:** DarkMode — resistant-site darkener
-- **Summary (≤250 chars):**
-  Does nothing until asked. Click the toolbar icon on sites that resist dark
-  mode (inline styles, canvases, transparent-root pages like Foxglove docs) to
-  darken them; optionally remember a site so it auto-darkens on future visits.
+- **Summary (≤250 chars):** *(revised 2026-10-28 — the old "does nothing until
+  asked" was no longer literally true once Gmail started being corrected
+  automatically; the description now agrees with the code. 227 chars.)*
+  Does nothing until asked, with one exception: Gmail, which has its own dark
+  theme and is never inverted. Click the toolbar icon on sites that resist dark
+  mode to darken them; optionally remember a site so it auto-darkens later.
 - **Detailed description:**
   DarkMode is for the resistant cases — sites that shrug off ordinary
   dark-mode extensions. Most darkeners politely override element styles;
@@ -29,6 +31,10 @@ only (free, matches the Zen/Firefox install base).**
   - Tick **Always dark on <site>** → the site auto-darkens on future visits
     (stored locally in browser sync storage; nothing is ever auto-added).
   - The active button reads **Disable Dark Mode override** — one click reverts.
+
+  Gmail is the one exception: it already has a dark theme, so DarkMode never
+  inverts it. Instead, it silently corrects the few panels Gmail's dark theme
+  leaves white, using colours taken from Gmail's own palette.
 
   Settings are stored in the browser's own extension storage. No accounts, no
   servers, no remote code. Known trade-off of the filter tactic: `position:
