@@ -84,6 +84,19 @@ def main() -> int:
     (stage / "manifest.firefox.json").write_bytes(firefox_manifest_bytes())
     print(f"staged {len(FILES)} files -> {stage}")
 
+    # Stable "Load unpacked" target. The versioned dir changes name every
+    # release, so a browser pointed at dist/DarkMode-1.0.6 needs a remove +
+    # re-add for 1.0.7 — which is how the browser ended up loading a build two
+    # releases behind the repo. Point the browser at DarkMode-current once and a
+    # release becomes: rebuild -> click Reload.
+    current = DIST / "DarkMode-current"
+    current.mkdir(parents=True, exist_ok=True)
+    for f in FILES + ["manifest.firefox.json"]:
+        dst = current / f
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(stage / f, dst)
+    print(f"mirrored -> {current}  (stable load-unpacked path)")
+
     zpath = DIST / f"DarkMode-{ver}.zip"   # Chromium
     xpath = DIST / f"DarkMode-{ver}.xpi"   # Firefox / Zen / AMO
     write_zip(zpath)

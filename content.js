@@ -9,7 +9,7 @@
    content.css and do nothing until the class exists. */
 (function () {
   'use strict';
-  const VERSION = '1.0.6';
+  const VERSION = '1.0.7';
   const HOST = location.hostname.replace(/^www\./, '');
 
   if (window.top !== window) return; // frames: parent handles the page
@@ -181,9 +181,21 @@
     try {
       if (toneNatural(true) === 'dark') fix();
       window.addEventListener('load', schedule);
+      /* Observe documentElement, NOT body. content.js runs at document_start,
+         where document.body is still null — so `mo.observe(document.body, ...)`
+         silently attaches to nothing and only the one-shot scan ever runs.
+         That was a real defect (1.0.6): Gmail rendered its Reply/Forward button
+         row LATER, the observer that should have caught it was never attached,
+         so .nr.wR stayed white while the rest of the bar was dark. Failing
+         quietly is how a fix looks "shipped" and still isn't working. */
       const mo = new MutationObserver(schedule);
-      if (document.body) mo.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style'] });
-      setTimeout(schedule, 1500);   // Gmail paints the thread card after load
+      mo.observe(document.documentElement, {
+        childList: true, subtree: true,
+        attributes: true, attributeFilter: ['class', 'style']
+      });
+      /* Gmail paints thread chrome on its own timetable; a short ladder costs
+         nothing and covers re-renders the observer can still miss. */
+      [300, 1200, 2500, 5000, 9000].forEach(t => setTimeout(schedule, t));
     } catch (e) {}
     window.__crGmailFix = fix;
   }
