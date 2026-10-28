@@ -9,7 +9,7 @@
    content.css and do nothing until the class exists. */
 (function () {
   'use strict';
-  const VERSION = '1.0.5';
+  const VERSION = '1.0.6';
   const HOST = location.hostname.replace(/^www\./, '');
 
   if (window.top !== window) return; // frames: parent handles the page
@@ -59,6 +59,7 @@
       tone: () => 'themed', host: HOST, version: VERSION, denied: why
     };
     markGmailTone();
+    startGmailSurfaceFix();   // hoisted: repaints the surfaces Gmail's theme leaves white
     return;
   }
 
@@ -85,6 +86,106 @@
       if (document.body) mo.observe(document.body, { attributes: true, attributeFilter: ['class', 'style'] });
       setTimeout(sync, 1500);   // Gmail repaints theme surfaces after load
     } catch (e) {}
+  }
+
+  /* ── GMAIL SURFACE NORMALISER (1.0.6) ────────────────────────────────────
+     Why measurement and not selectors: 1.0.4 shipped three hard-coded Gmail
+     class rules. Measured live 2026-10-28 on an OPEN CONVERSATION, Gmail
+     rendered THREE white surfaces — .nH.a98.iY (thread card 807x2126),
+     .nH.btDi4d.rT5Apb (Reply/Forward bar 791x68) and .nr.wR (the button row
+     inside that bar 719x36). The whitelist covered two of three, and would
+     break again the next time Gmail renames a class.
+
+     So instead: SAMPLE the page's own dark palette (its darkest large surface
+     and its lightest real ink), then repaint any near-white background inside
+     [role=main] to that sampled surface, and lighten near-black ink ONLY
+     inside the surfaces we repainted. Order matters both ways: painting a
+     surface without lightening its ink makes text vanish, and lightening ink
+     on a surface we did not paint makes it vanish on white.
+
+     Idempotency is mandatory (a self-triggering observer is what hangs pages):
+     every write is guarded by a data-cr-surf / data-cr-ink marker, so a second
+     pass writes nothing, produces no mutations, and the loop settles. */
+  function startGmailSurfaceFix() {
+    let palette = null, armed = false;
+
+    function parseColor(s) {
+      const m = String(s).match(/rgba?\(([\d.]+),\s*([\d.]+),\s*([\d.]+)(?:,\s*([\d.]+))?/);
+      if (!m) return null;
+      return [+m[1], +m[2], +m[3], m[4] === undefined ? 1 : +m[4]];
+    }
+    function lum(c) { return (0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]) / 255; }
+
+    /* sample the page's own palette, so the patch matches whatever dark theme
+       the user picked instead of imposing a hard-coded grey */
+    function sample() {
+      const root = document.querySelector('[role=main]') || document.body;
+      if (!root) return null;
+      const els = root.querySelectorAll('*');
+      const n = Math.min(els.length, 7000);
+      let surf = null, ink = null;
+      for (let i = 0; i < n && !(surf && ink); i++) {
+        const el = els[i];
+        const cs = getComputedStyle(el);
+        const r = el.getBoundingClientRect();
+        if (!surf) {
+          const b = parseColor(cs.backgroundColor);
+          if (b && b[3] > 0.9 && lum(b) < 0.22 && r.width * r.height > 20000) surf = cs.backgroundColor;
+        }
+        if (!ink) {
+          const c = parseColor(cs.color);
+          const t = el.textContent ? el.textContent.trim() : '';
+          if (c && c[3] > 0.5 && lum(c) > 0.55 && t.length > 8 && r.width > 40) ink = cs.color;
+        }
+      }
+      return { surf: surf || 'rgb(32,33,36)', ink: ink || 'rgb(224,224,224)' };
+    }
+
+    function fix() {
+      if (toneNatural(true) !== 'dark') return;   // never fight a light Gmail
+      const root = document.querySelector('[role=main]') || document.body;
+      if (!root) return;
+      palette = palette || sample();
+      if (!palette) return;
+      const els = root.querySelectorAll('*');
+
+      // pass 1 — repaint near-white surfaces
+      for (let i = 0; i < els.length; i++) {
+        const el = els[i];
+        if (el.dataset.crSurf === '1') continue;
+        const b = parseColor(getComputedStyle(el).backgroundColor);
+        if (!b || b[3] <= 0.4 || lum(b) < 0.75) continue;
+        el.style.setProperty('background-color', palette.surf, 'important');
+        el.dataset.crSurf = '1';
+      }
+
+      // pass 2 — lighten near-black ink, but ONLY inside surfaces we repainted
+      for (let i = 0; i < els.length; i++) {
+        const el = els[i];
+        if (el.dataset.crInk === '1') continue;
+        const c = parseColor(getComputedStyle(el).color);
+        if (!c || c[3] <= 0.4 || lum(c) > 0.30) continue;
+        if (!el.closest('[data-cr-surf="1"]')) continue;   // leaves dark-on-dark alone
+        el.style.setProperty('color', palette.ink, 'important');
+        el.dataset.crInk = '1';
+      }
+    }
+
+    /* trailing-edge debounce; the writes above are idempotent so this settles */
+    function schedule() {
+      if (armed) return;
+      armed = true;
+      setTimeout(() => { armed = false; try { fix(); } catch (e) {} }, 450);
+    }
+
+    try {
+      if (toneNatural(true) === 'dark') fix();
+      window.addEventListener('load', schedule);
+      const mo = new MutationObserver(schedule);
+      if (document.body) mo.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style'] });
+      setTimeout(schedule, 1500);   // Gmail paints the thread card after load
+    } catch (e) {}
+    window.__crGmailFix = fix;
   }
 
   /* Is the page ALREADY dark (native dark theme, browser auto-dark, or another

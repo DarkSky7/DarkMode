@@ -52,3 +52,17 @@ Known trade-offs of the filter tactic (accepted for the resistant case):
   `VERSION` constants so `about:debugging` / the popup show an honest build.
 - Test target #1: **foxglove.dev** (resists the stock Dark Mode extension).
   Load unpacked, click the icon on a foxglove.dev page, then tick "Always dark".
+
+## INSTALL PATH (read before editing)
+
+Brave loads this extension UNPACKED from `D:\Programs\DarkMode\DarkMode` — a COPY,
+not this repo. Editing here does nothing until you sync:
+
+    bash scripts/sync-to-brave.sh
+
+then click **Reload** on DarkMode in `brave://extensions` (content scripts are
+re-read from disk only on extension reload). This cost two shipped-but-invisible
+Gmail fixes (1.0.4, 1.0.5) on 2026-10-28 before it was caught.
+
+Install path + reload step is the first thing to check when a change
+"does not take effect".
