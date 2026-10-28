@@ -37,10 +37,14 @@ html.cr-dark ::-webkit-scrollbar-thumb { background: #263046; }
    the mail around them is dark, which reads as white bands above/beside the
    message.
 
-   Gate is Gmail's own marker, not a guess: with its dark theme active Gmail
-   puts class `aAX` on <html> (measured live 2026-10-28:
-   <html class="aAX">). A user running Gmail's LIGHT theme lacks that class and
-   is therefore untouched by these rules.
+   Gate is MEASURED, not guessed. This first shipped keyed on Gmail's own
+   `aAX` class on <html>, inferred from one observation. That was wrong:
+   re-measured 2026-10-28 with Gmail on its LIGHT-GREY theme, <html> still
+   carries `aAX` (body bg rgb(248,250,253)) exactly as it did under the dark
+   theme (body bg rgb(17,17,17)). `aAX` is therefore not a dark marker, and
+   keying on it would have darkened a light Gmail. Instead content.js sets
+   `cr-gmail-dark` on <html> only when toneNatural() measures the page dark,
+   and re-decides on load and on Gmail's own class/style mutations.
 
    Measured via CDP A/B on a single DOM state (same DOM, class toggled off/on,
    250 ms settle): white-background elements inside [role=main] went 1 -> 0.
@@ -52,9 +56,9 @@ html.cr-dark ::-webkit-scrollbar-thumb { background: #263046; }
    Kept intentionally narrow: Gmail reuses .nH widely, so the three containers
    are named explicitly rather than styling .nH wholesale. Re-verify by eye after
    enabling, and re-measure if Gmail renames its classes. */
-html.aAX .nH.a98.iY,
-html.aAX .nH.btDi4d.rT5Apb,
-html.aAX .nH.r4 {
+html.cr-gmail-dark .nH.a98.iY,
+html.cr-gmail-dark .nH.btDi4d.rT5Apb,
+html.cr-gmail-dark .nH.r4 {
   background-color: #111111 !important;
   color: #e8eaed !important;
 }
@@ -62,9 +66,9 @@ html.aAX .nH.r4 {
 /* Don't paint children over the corrected surface: Gmail nests many divs with
    their own light backgrounds inside these containers. Media is excluded so
    images in the message are not flattened. */
-html.aAX .nH.a98.iY div:not([class]),
-html.aAX .nH.btDi4d.rT5Apb div:not([class]),
-html.aAX .nH.r4 div:not([class]) {
+html.cr-gmail-dark .nH.a98.iY div:not([class]),
+html.cr-gmail-dark .nH.btDi4d.rT5Apb div:not([class]),
+html.cr-gmail-dark .nH.r4 div:not([class]) {
   background-color: transparent !important;
 }
 

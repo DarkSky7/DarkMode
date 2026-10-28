@@ -9,7 +9,7 @@
    content.css and do nothing until the class exists. */
 (function () {
   'use strict';
-  const VERSION = '1.0.3';
+  const VERSION = '1.0.5';
   const HOST = location.hostname.replace(/^www\./, '');
 
   if (window.top !== window) return; // frames: parent handles the page
@@ -20,6 +20,72 @@
   function apply() { document.documentElement.classList.add(KEY); }
   function revert() { document.documentElement.classList.remove(KEY); }
   function isDark() { return document.documentElement.classList.contains(KEY); }
+
+  /* ── DENY LIST — sites where inverting is the WRONG TOOL (2026-10-28) ──────
+     An app that ships its own themes plus its own accent colours cannot be
+     served by a colour-wheel invert: invert(1) maps cyan -> brown, so the
+     Gmail Accent tint the user chose comes back as a different colour, while
+     plain dark ink comes back white. Measured on Gmail with the light-grey
+     theme: html class "aAX cr-dark", filter invert(1), accent painted
+     rgb(123,200,206) by gmail-accent -> renders rgb(132,55,49), i.e. brown.
+     toneNatural() cannot catch this: the page IS genuinely light, so the
+     existing "don't invert an already-dark page" guard correctly says "go" —
+     and produces garbage anyway.
+
+     So the fix is to be smart enough to REFUSE the invert. Gmail has a native
+     dark theme and DarkMode content.css patches the few surfaces that theme
+     leaves white — gated on a class WE set from measurement (cr-gmail-dark).
+     Delete an entry to allow the site again. */
+  const DENY = {
+    'mail.google.com': 'Gmail has a native dark theme, and inverting its accents ' +
+      'turns them brown. Use Gmail\'s own dark theme — DarkMode is not needed here.'
+  };
+  if (Object.prototype.hasOwnProperty.call(DENY, HOST)) {
+    const why = DENY[HOST];
+    revert();                              // clear any stale class from storage/older version
+    try {                                  // forget a previously remembered entry
+      chrome.storage.sync.get('darkHosts', (got) => {
+        const hosts = got.darkHosts || {};
+        if (hosts[HOST]) { delete hosts[HOST]; chrome.storage.sync.set({ darkHosts: hosts }); }
+      });
+    } catch (e) {}
+    chrome.runtime.onMessage.addListener((msg, _s, respond) => {
+      respond({ dark: false, host: HOST, v: VERSION, tone: 'themed', denied: true, reason: why });
+      return false;
+    });
+    try { chrome.runtime.sendMessage({ type: 'dmHostState', host: HOST, dark: false, denied: true }); } catch (e) {}
+    window.__darkMode = {
+      apply() {}, revert() {}, isDark: () => false,
+      tone: () => 'themed', host: HOST, version: VERSION, denied: why
+    };
+    markGmailTone();
+    return;
+  }
+
+  /* Gmail's OWN theme leaves a handful of containers white; content.css carries
+     narrow rules for exactly those, gated on html.cr-gmail-dark. That class is
+     set from MEASUREMENT, never from a Gmail class name: measured 2026-10-28,
+     Gmail puts `aAX` on <html> under BOTH its dark theme (body bg
+     rgb(17,17,17)) and its light-grey theme (body bg rgb(248,250,253)) — so
+     `aAX` is not a dark marker and keying on it would darken a light Gmail.
+     Re-decide whenever Gmail repaints its theme. */
+  function markGmailTone() {
+    const GM = 'cr-gmail-dark';
+    const sync = () => {
+      try {
+        const dark = (toneNatural(true) === 'dark');
+        document.documentElement.classList.toggle(GM, dark);
+      } catch (e) {}
+    };
+    try {
+      sync();
+      window.addEventListener('load', sync);
+      const mo = new MutationObserver(sync);
+      mo.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'style'] });
+      if (document.body) mo.observe(document.body, { attributes: true, attributeFilter: ['class', 'style'] });
+      setTimeout(sync, 1500);   // Gmail repaints theme surfaces after load
+    } catch (e) {}
+  }
 
   /* Is the page ALREADY dark (native dark theme, browser auto-dark, or another
      extension's full invert)?  Inverting a dark page would fake the original
