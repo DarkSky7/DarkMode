@@ -53,16 +53,33 @@ Known trade-offs of the filter tactic (accepted for the resistant case):
 - Test target #1: **foxglove.dev** (resists the stock Dark Mode extension).
   Load unpacked, click the icon on a foxglove.dev page, then tick "Always dark".
 
-## INSTALL PATH (read before editing)
+## INSTALL PATH + RELEASE STEPS (read before editing)
 
-Brave loads this extension UNPACKED from `D:\Programs\DarkMode\DarkMode` — a COPY,
-not this repo. Editing here does nothing until you sync:
+**The browser does NOT load this repo root.** Per `scripts/package.py`, the
+canonical Chromium load path is a *staged build*:
 
-    bash scripts/sync-to-brave.sh
+    dist/DarkMode-<version>/     <- "Load unpacked" points HERE
+    dist/DarkMode-<version>.zip  <- Chromium archive
+    dist/DarkMode-<version>.xpi  <- Firefox / Zen / AMO
 
-then click **Reload** on DarkMode in `brave://extensions` (content scripts are
-re-read from disk only on extension reload). This cost two shipped-but-invisible
-Gmail fixes (1.0.4, 1.0.5) on 2026-10-28 before it was caught.
+So a version bump with no build is invisible to the browser. Release checklist —
+skip any step and a change ships "successfully" and does nothing:
 
-Install path + reload step is the first thing to check when a change
-"does not take effect".
+1. Bump the version in **all three** places. Miss `popup.js` and the popup
+   cheerfully displays the OLD version while running the new code:
+   - `manifest.json` → `version`
+   - `content.js` → `const VERSION`
+   - `popup.js` → `const VERSION`
+2. Build: `python scripts/package.py` (stages `dist/DarkMode-<ver>/` + zip + xpi)
+3. In `brave://extensions`, **Reload** the DarkMode card (unpacked content
+   scripts are re-read from disk only on extension reload).
+
+History, so this isn't repeated: 1.0.4 and 1.0.5 were committed with no package
+built and no popup bump, so the browser kept loading `dist/DarkMode-1.0.3` while
+the repo claimed a fix — reported as "reload keeps showing 1.0.3". Two stale
+registry entries then degraded to `path=None` in Secure Preferences and injected
+nothing at all.
+
+`scripts/sync-to-brave.sh` exists only for the secondary copy at
+`D:\Programs\DarkMode\DarkMode`; keep it in step or remove that entry so there is
+exactly one DarkMode installed.
