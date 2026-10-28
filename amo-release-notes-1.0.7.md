@@ -12,7 +12,7 @@ Gmail ships its own dark theme, but a few of its containers — the message
 card, the Reply/Forward bar and the button row inside it — keep a white
 background with dark text, which is glaring in an otherwise dark inbox. This
 release repaints those surfaces, and lightens the text inside them, using
-colours SAMPLED from the page's own dark theme rather than hard-coded greys,
+colors SAMPLED from the page's own dark theme rather than hard-coded greys,
 so the patch matches whatever Gmail theme you have chosen.
 
 DarkMode also now refuses to apply its colour-wheel invert to Gmail at all.

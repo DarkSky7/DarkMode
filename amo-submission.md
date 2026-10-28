@@ -34,7 +34,7 @@ only (free, matches the Zen/Firefox install base).**
 
   Gmail is the one exception: it already has a dark theme, so DarkMode never
   inverts it. Instead, it silently corrects the few panels Gmail's dark theme
-  leaves white, using colours taken from Gmail's own palette.
+  leaves white, using colors taken from Gmail's own palette.
 
   Settings are stored in the browser's own extension storage. No accounts, no
   servers, no remote code. Known trade-off of the filter tactic: `position:
@@ -44,6 +44,32 @@ only (free, matches the Zen/Firefox install base).**
   unavailable in the chosen store region).
 - **Homepage:** https://github.com/DarkSky7/DarkMode
 - **Support URL:** https://github.com/DarkSky7/DarkMode/issues
+
+## Paste-ready field values (2026-10-28, for the /edit page)
+
+Copy exactly what is inside each block. Verified: the summary is 227 characters
+(AMO's limit is 250).
+
+**Summary field:**
+
+```
+Does nothing until asked, with one exception: Gmail, which has its own dark theme and is never inverted. Click the toolbar icon on sites that resist dark mode to darken them; optionally remember a site so it auto-darkens later.
+```
+
+**Description field:**
+
+```
+DarkMode is for the resistant cases — sites that shrug off ordinary dark-mode extensions. Most darkeners politely override element styles; DarkMode instead flips the rendered page across the color wheel (white to black, black to white, red to cyan, yellow to blue) via a CSS filter, which reaches inline styles, canvases, color-scheme lock-ins, and pages whose white background is the browser canvas behind a transparent root. Pictures are exempt: images, video, canvases and embedded frames are flipped back to their natural colors.
+
+It does nothing until you ask:
+- Click the toolbar icon, then "Darken this page" (this visit only).
+- Tick "Always dark on <site>" and that site auto-darkens on future visits (stored locally in browser sync storage; nothing is ever auto-added).
+- The active button reads "Disable Dark Mode override" — one click reverts.
+
+Gmail is the one exception: it already has a dark theme, so DarkMode never inverts it. Instead, it silently corrects the few panels Gmail's dark theme leaves white, using colors taken from Gmail's own palette.
+
+Settings are stored in the browser's own extension storage. No accounts, no servers, no remote code. Known trade-off of the filter tactic: position: fixed headers can misbehave on some pages, and screenshots capture the darkened rendering.
+```
 
 ## Privacy policy (ready-to-paste — collects nothing)
 

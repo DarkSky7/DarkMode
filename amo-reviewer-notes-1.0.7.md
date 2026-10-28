@@ -11,7 +11,7 @@ is the part a reviewer is most likely to query.
 WHAT IT DOES
 A dark-mode utility for sites that resist ordinary darkeners. It applies a CSS
 filter invert(1) to the page, and counter-inverts images/video/canvas so media
-keeps its natural colours. It is not an overlay or a content rewriter: no
+keeps its natural colors. It is not an overlay or a content rewriter: no
 element's text is harvested, altered or transmitted.
 
 PERMISSIONS AND WHY
@@ -35,7 +35,7 @@ ticked "Always dark on <site>" for that host.
 THE ONE AUTOMATIC CASE (please read)
 mail.google.com is special-cased, and this release is where that behaviour was
 introduced. Gmail ships its own dark theme, so inverting it is the wrong tool:
-invert(1) maps the user's chosen accent colour to a different hue (measured:
+invert(1) maps the user's chosen accent color to a different hue (measured:
 rgb(123,200,206) renders as rgb(132,55,49), i.e. cyan becomes brown) while
 ordinary dark text becomes white. Earlier versions produced a broken-looking
 inbox when a user enabled the extension there.
@@ -44,7 +44,7 @@ So on mail.google.com the extension NEVER applies the invert. Instead, when —
 and only when — the page itself already measures as dark (body background
 luminance <= 0.28), it corrects the handful of containers Gmail's own dark theme
 leaves white, by setting background-color/color inline on those elements. The
-replacement colours are sampled from the page's own palette, not hard-coded.
+replacement colors are sampled from the page's own palette, not hard-coded.
 Nothing is sent anywhere; no Gmail content is read or stored.
 
 If you would prefer this behaviour to be opt-in as well, it can be gated behind
@@ -74,7 +74,7 @@ updated in `amo-submission.md`:
 ```
 Gmail is the one exception: it already has a dark theme, so DarkMode never
 inverts it. Instead, it silently corrects the few panels Gmail's dark theme
-leaves white, using colours taken from Gmail's own palette.
+leaves white, using colors taken from Gmail's own palette.
 ```
 
 The code was NOT changed — the behaviour is right and narrow, and the listing
