@@ -29,3 +29,43 @@ html.cr-dark svg image {
 html.cr-dark ::-webkit-scrollbar { background: #0b0f17; }
 html.cr-dark ::-webkit-scrollbar-thumb { background: #263046; }
 
+/* ── Gmail: surfaces Gmail's OWN dark theme leaves white (2026-10-28) ─────────
+   These rules deliberately do NOT ride the invert engine above. Gmail has a
+   native dark theme, so the invert filter would turn an already-dark Gmail
+   LIGHT — the exact opposite of what a user with dark theme wants. What is
+   broken on Gmail is narrower: a few containers keep a light background while
+   the mail around them is dark, which reads as white bands above/beside the
+   message.
+
+   Gate is Gmail's own marker, not a guess: with its dark theme active Gmail
+   puts class `aAX` on <html> (measured live 2026-10-28:
+   <html class="aAX">). A user running Gmail's LIGHT theme lacks that class and
+   is therefore untouched by these rules.
+
+   Measured via CDP A/B on a single DOM state (same DOM, class toggled off/on,
+   250 ms settle): white-background elements inside [role=main] went 1 -> 0.
+   Selectors observed carrying white backgrounds while the page was dark:
+     .nH.a98.iY      thread card, rect [72,112,807,857], ink rgb(32,33,36)
+                     ("Collapse all / Print all / In new window")
+     .nH.btDi4d.rT5Apb  action row ("Reply / Forward / Add reaction"), ink rgb(34,34,34)
+     .nH.r4          notice bar, rgba(255,255,255,0.95), full-width 68 px tall
+   Kept intentionally narrow: Gmail reuses .nH widely, so the three containers
+   are named explicitly rather than styling .nH wholesale. Re-verify by eye after
+   enabling, and re-measure if Gmail renames its classes. */
+html.aAX .nH.a98.iY,
+html.aAX .nH.btDi4d.rT5Apb,
+html.aAX .nH.r4 {
+  background-color: #111111 !important;
+  color: #e8eaed !important;
+}
+
+/* Don't paint children over the corrected surface: Gmail nests many divs with
+   their own light backgrounds inside these containers. Media is excluded so
+   images in the message are not flattened. */
+html.aAX .nH.a98.iY div:not([class]),
+html.aAX .nH.btDi4d.rT5Apb div:not([class]),
+html.aAX .nH.r4 div:not([class]) {
+  background-color: transparent !important;
+}
+
+
