@@ -1,5 +1,38 @@
 # DarkMode — TODO / workstream tracker
 
+## 2026-11-05 — 1.0.11–1.0.13: Gmail repair step actually works now
+
+### Done
+- [x] **1.0.11 — the real Gmail bug.** The Gmail branch returns early at the
+      DENY check, which sits ABOVE `const MEDIA_TAGS`. `const` is hoisted but not
+      initialised, so every `fix()` call threw
+      `ReferenceError: Cannot access 'MEDIA_TAGS' before initialization` into a
+      silent `catch`. The stylesheet half still worked, so Gmail LOOKED handled
+      while the measurement-driven normaliser had never repainted one surface
+      (measured: 0 `[data-cr-surf]` markers). Fixed by moving every const a
+      hoisted function can reach above the early returns, and by logging the
+      swallowed exception instead of dropping it.
+- [x] 1.0.12 — Gmail scan root `[role=main]` -> `body`: compose panes
+      (`DIV.J-M.J-M-ayU`, 71,047 / 63,535 / 24,236 px) live outside the mail
+      area and were never examined. `globalInk` stays false, so widening the scan
+      does not widen what gets restyled.
+- [x] 1.0.13 — `inkScopes`: containers that `content.css` darkens by CSS alone
+      carry no marker, so their text was never lifted. The subject line `.hP`
+      stayed rgb(31,31,31) on a rgb(17,17,17) panel (1.15:1). Ink scopes now
+      include `.nH.a98.iY`, `.nH.btDi4d.rT5Apb`, `.nH.r4`.
+- [x] Measured with a compose window open: white surfaces **13 -> 0**, 118 text
+      elements, **0 below 3:1**, median 11.0, minimum 3.04 (the user's own accent
+      cyan, deliberately untouched).
+
+### Open
+- [ ] The one remaining white surface seen on some loads is Google's one-bar
+      search `FORM.gb_Rd.gb_4e` (24,812 px²) — it carries `data-cr-surf` but reads
+      white, so something re-applies it. Re-check on a fresh load.
+- [ ] Restore the tabs that `--restore-last-session` did not bring back (only 15
+      of the prior session returned); session files backed up in
+      `F:\tmp\msi\brave-session-20261105-final`.
+- [ ] Resume/replace the tabs list from `History -> Recently closed`.
+
 ## 2026-11-05 — 1.0.10: background-image media no longer stays inverted
 
 ### Done

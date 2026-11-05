@@ -9,7 +9,7 @@
    content.css and do nothing until the class exists. */
 (function () {
   'use strict';
-  const VERSION = '1.0.10';
+  const VERSION = '1.0.13';
   const HOST = location.hostname.replace(/^www\./, '');
 
   if (window.top !== window) return; // frames: parent handles the page
@@ -19,6 +19,23 @@
   const KEY_REPAINT = 'cr-repaint';  // measurement-repaint engine
   // Elements that render media themselves — never treated as "a painted surface".
   const MEDIA_TAGS_BG = /^(IMG|VIDEO|CANVAS|SVG|PICTURE|IFRAME|OBJECT|EMBED)$/;
+
+  /* ── DECLARED BEFORE THE DENY/BLOCKED EARLY RETURNS, DELIBERATELY (1.0.11) ──
+     `const` is hoisted but NOT initialized, so anything after a `return` sits in
+     the temporal dead zone for the rest of that execution. The Gmail branch
+     returns at the DENY check below; MEDIA_TAGS was declared after it, so every
+     call to the Gmail surface fixer threw
+         ReferenceError: Cannot access 'MEDIA_TAGS' before initialization
+     and the surrounding catch swallowed it. Symptom: the CSS rules still applied
+     (they need no JS), so Gmail LOOKED handled while the measurement-driven
+     normaliser never repainted a single surface. Measured 2026-11-05 with
+     zero [data-cr-surf] markers on a live thread, and reproduced by calling
+     window.__crGmailFix() from the extension's own isolated world.
+     Anything a hoisted function may touch from an early-return path belongs
+     here. */
+  const MEDIA_TAGS = /^(IMG|VIDEO|CANVAS|SVG|PICTURE|IFRAME|OBJECT|EMBED)$/;
+  const repaintStarted = { done: false };
+  const bgPhotoStarted = { done: false };
 
   /* ── REPAINT LIST — sites where the invert is the WRONG TOOL but the site
      also has no dark theme of its own (2026-11-05) ──────────────────────────
@@ -144,8 +161,6 @@
      Idempotency is mandatory (a self-triggering observer is what hangs pages):
      every write is guarded by a data-cr-surf / data-cr-ink marker, so a second
      pass writes nothing, produces no mutations, and the loop settles. */
-  const MEDIA_TAGS = /^(IMG|VIDEO|CANVAS|SVG|PICTURE|IFRAME|OBJECT|EMBED)$/;
-  const repaintStarted = { done: false };
 
   function startSurfaceNormaliser(cfg) {
     const conf = Object.assign({
@@ -415,10 +430,23 @@
            canvas was left alone). Lift below 4.5:1 (WCAG AA for body text). */
         const bgc = effectiveBg(el);
         if (contrast(wcagLum(c), wcagLum(bgc)) >= 4.5) continue;
-        // Gmail: only inside a surface we repainted (leaves dark-on-dark alone).
+        /* Gmail: only inside a surface WE made dark (leaves dark-on-dark alone). */
         // Repaint sites: page-wide, because WE made the page dark and an element
         // with no background of its own now sits on our dark canvas.
-        if (!conf.globalInk && !el.closest('[data-cr-surf="1"]')) continue;
+        if (!conf.globalInk) {
+          /* `inkScopes` (1.0.13): a surface can be ours without carrying a
+             marker — content.css darkens Gmail's .nH.a98.iY / .btDi4d.rT5Apb /
+             .r4 containers by CSS alone. Measured on a live thread: the subject
+             .hP kept color rgb(31,31,31) on a rgb(17,17,17) panel, contrast
+             1.15:1, because it was not inside [data-cr-surf] and so was never
+             lifted. Any scope listed here counts as ours for ink purposes. */
+          let ours = false;
+          const scopes = conf.inkScopes || ['[data-cr-surf="1"]'];
+          for (let s = 0; s < scopes.length && !ours; s++) {
+            if (el.closest(scopes[s])) ours = true;
+          }
+          if (!ours) continue;
+        }
         el.style.setProperty('color', conf.globalInk ? lift(c) : palette.ink, 'important');
         el.dataset.crInk = '1';
       }
@@ -429,11 +457,23 @@
       if (conf.tiles) { try { fixTiles(r); } catch (e) {} }
     }
 
+    /* A swallowed exception here is how the 1.0.11 TDZ bug hid: the CSS half
+       still worked, so Gmail looked handled while the JS half did nothing.
+       Fail loudly, once per distinct message, so a broken pass is visible in
+       DevTools instead of silently producing a half-dark page. */
+    let warned = '';
+    function warnOnce(e) {
+      const msg = (e && (e.stack || e.message)) || String(e);
+      if (warned === msg) return;
+      warned = msg;
+      try { console.warn('[DarkMode] surface pass failed:', msg); } catch (_) {}
+    }
+
     /* trailing-edge debounce; the writes above are idempotent so this settles */
     function schedule() {
       if (armed) return;
       armed = true;
-      setTimeout(function () { armed = false; try { fix(); } catch (e) {} }, 450);
+      setTimeout(function () { armed = false; try { fix(); } catch (e) { warnOnce(e); } }, 450);
     }
 
     try {
@@ -455,18 +495,29 @@
          and covers re-renders the observer can still miss. The wardrobe app
          loads 30 tables and 100+ images after the initial HTML. */
       [300, 1200, 2500, 5000, 9000, 15000, 22000, 30000].forEach(function (t) { setTimeout(schedule, t); });
-    } catch (e) {}
+    } catch (e) { warnOnce(e); }
     return fix;
   }
 
   /* Gmail: patch the bands its own dark theme leaves white. */
   function startGmailSurfaceFix() {
     window.__crGmailFix = startSurfaceNormaliser({
-      rootSel: '[role=main]',
+      /* body, NOT [role=main] (1.0.12). Measured 2026-11-05: Gmail's compose
+         panes are DIV.J-M.J-M-ayU, appended outside [role=main], and they were
+         still pure white (rgb(255,255,255), 71,047 / 63,535 / 24,236 px) with
+         `?compose=` open. Scanning only main meant the biggest remaining white
+         areas were never examined. The gate and the ink rule are unchanged, so
+         widening the scan does not widen what gets restyled:
+         globalInk stays false, so text is only lifted inside a surface we
+         actually repainted. */
+      rootSel: 'body',
       gate: function () { return toneNatural(true) === 'dark'; },
       fallbackSurf: 'rgb(32,33,36)',
       fallbackInk: 'rgb(224,224,224)',
-      globalInk: false
+      globalInk: false,
+      /* content.css darkens these by CSS alone, so they carry no marker but are
+         still ours: ink inside them must be lifted too (1.0.13). */
+      inkScopes: ['[data-cr-surf="1"]', '.nH.a98.iY', '.nH.btDi4d.rT5Apb', '.nH.r4']
     });
   }
 
@@ -497,8 +548,6 @@
 
      Gradients are skipped entirely: we cannot restore a gradient's colours
      individually, and inverting the element would drag its text back to light. */
-  const bgPhotoStarted = { done: false };
-
   function startBgPhotoFix() {
     if (bgPhotoStarted.done) return;
     bgPhotoStarted.done = true;
