@@ -9,7 +9,7 @@
    content.css and do nothing until the class exists. */
 (function () {
   'use strict';
-  const VERSION = '1.0.9';
+  const VERSION = '1.0.10';
   const HOST = location.hostname.replace(/^www\./, '');
 
   if (window.top !== window) return; // frames: parent handles the page
@@ -17,6 +17,8 @@
 
   const KEY = 'cr-dark';        // filter-inversion engine
   const KEY_REPAINT = 'cr-repaint';  // measurement-repaint engine
+  // Elements that render media themselves — never treated as "a painted surface".
+  const MEDIA_TAGS_BG = /^(IMG|VIDEO|CANVAS|SVG|PICTURE|IFRAME|OBJECT|EMBED)$/;
 
   /* ── REPAINT LIST — sites where the invert is the WRONG TOOL but the site
      also has no dark theme of its own (2026-11-05) ──────────────────────────
@@ -40,6 +42,7 @@
   function apply() {
     document.documentElement.classList.add(OWN_KEY);
     if (ENGINE === 'repaint') startSurfaceRepaint();
+    else startBgPhotoFix();
   }
   function revert() {
     document.documentElement.classList.remove(OWN_KEY);
@@ -465,6 +468,77 @@
       fallbackInk: 'rgb(224,224,224)',
       globalInk: false
     });
+  }
+
+  /* ── BACKGROUND-IMAGE MEDIA (1.0.10) ───────────────────────────────────────
+     The invert engine restores media ELEMENTS (img/picture/video/canvas/…) so
+     photos are not film negatives. It cannot restore a photo that is painted as
+     a CSS background-image, because no element is doing the painting — the page
+     filter inverts it and the re-invert rules never match.
+
+     Measured on aliexpress.us (2026-11-05), rendered pixels versus the actual
+     source file fetched independently:
+       .coupon-3--coupon--3kpjCy-   rendered rgb(1,22,16)   source rgb(252,252,252)
+       .root-sidecart               rendered rgb(14,19,29)  source rgb(248,248,248)
+     Both were exactly the complement (distance 34/41 to complement versus
+     682/717 to the true colour). All 586 <img> elements on the same page were
+     correctly restored, which is why only SOME photos looked inverted.
+
+     So: mark elements that paint a bitmap background and let CSS invert them a
+     second time, cancelling the page filter. Two rules keep it honest:
+
+     * Area floor 10,000 px² (≈100x100). Sprites and icons are smaller, and
+       restoring a dark icon to its original colour on a dark page would erase
+       it — the opposite of a fix.
+     * Tiles are excluded: `background-repeat` other than no-repeat WITH
+       `background-size: auto` means a repeating plate (jQuery UI uses exactly
+       `repeat-x` + auto), and those are SUPPOSED to invert dark. Anything else
+       — cover, contain, 100% 100%, no-repeat — is treated as artwork.
+
+     Gradients are skipped entirely: we cannot restore a gradient's colours
+     individually, and inverting the element would drag its text back to light. */
+  const bgPhotoStarted = { done: false };
+
+  function startBgPhotoFix() {
+    if (bgPhotoStarted.done) return;
+    bgPhotoStarted.done = true;
+    let armed = false;
+
+    function pass() {
+      if (!isDark()) return;
+      const els = document.querySelectorAll('*');
+      for (let i = 0; i < els.length; i++) {
+        const el = els[i];
+        if (MEDIA_TAGS_BG.test(el.tagName)) continue;
+        if (el.dataset.crBgphoto) continue;                 // already handled
+        const box = el.getBoundingClientRect();
+        if (box.width * box.height < 10000) continue;       // sprites/icons
+        const cs = getComputedStyle(el);
+        const bi = cs.backgroundImage;
+        if (!bi || bi === 'none' || bi.indexOf('url(') === -1) continue;
+        if (/gradient/.test(bi)) continue;                  // not individually restorable
+        const repeats = cs.backgroundRepeat !== 'no-repeat';
+        const autoSize = cs.backgroundSize === 'auto';
+        if (repeats && autoSize) continue;                  // decorative tile/plate
+        /* A nested marker would be inverted twice and come back inverted. */
+        if (el.parentElement && el.parentElement.closest('[data-cr-bgphoto="1"]')) continue;
+        el.dataset.crBgphoto = '1';
+      }
+    }
+
+    function schedule() {
+      if (armed) return;
+      armed = true;
+      setTimeout(function () { armed = false; try { pass(); } catch (e) {} }, 450);
+    }
+
+    try {
+      window.addEventListener('load', schedule);
+      const mo = new MutationObserver(schedule);
+      mo.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style'] });
+      [300, 1200, 2500, 5000, 9000, 15000, 22000, 30000].forEach(function (t) { setTimeout(schedule, t); });
+      schedule();
+    } catch (e) {}
   }
 
   /* Repaint sites: we supply the darkness, so lift ink page-wide. */

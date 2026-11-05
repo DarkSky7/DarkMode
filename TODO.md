@@ -1,5 +1,27 @@
 # DarkMode — TODO / workstream tracker
 
+## 2026-11-05 — 1.0.10: background-image media no longer stays inverted
+
+### Done
+- [x] Invert engine now restores media painted as a CSS `background-image`.
+      Fault measured on aliexpress.us by comparing rendered pixels to the image
+      file: coupon rgb(1,22,16) vs source rgb(252,252,252); right promo
+      rgb(14,19,29) vs rgb(248,248,248) — both exact complements, while all 586
+      `<img>` elements were already correct. That is the "some photos are
+      inverted" signature.
+- [x] Guards: area >= 10,000 px² (icons/sprites keep dark treatment), repeating
+      tile at natural size excluded (plates are meant to invert), gradients
+      skipped, nested markers skipped, media inside a restored element set back
+      to `filter: none` so it is not inverted a third time.
+- [x] Verified: 4 elements marked, all `filter: invert(1)`, 0 small elements
+      wrongly marked, 1.0.10 on every registered unpacked path.
+
+### Open
+- [ ] Pixel A/B for all marked elements. Two clips returned blank white in the
+      harness (scrolled content), so only coupon and national-floor have clean
+      pixel proof (d(true) 40 / 23 against d(neg) 707 / 326).
+- [ ] CSS gradients still stay inverted — light gradient headers are not restored.
+
 ## 2026-11-05 — 1.0.9: repaint engine for image-heavy sites + tile plates
 
 ### Done

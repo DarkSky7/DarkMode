@@ -24,6 +24,32 @@ html.cr-dark svg image {
   filter: invert(1) !important;
 }
 
+/* ── BACKGROUND-IMAGE MEDIA (1.0.10) ─────────────────────────────────────────
+   A photo painted as a CSS background-image has no element of its own to
+   restore, so the page filter turns it into a negative: on aliexpress.us the
+   coupon banner rendered rgb(1,22,16) against a source of rgb(252,252,252), and
+   the right-hand promo rgb(14,19,29) against rgb(248,248,248) — complements,
+   measured by comparing rendered pixels to the image file itself.
+   content.js marks qualifying elements with data-cr-bgphoto; inverting the
+   element a second time cancels the page filter for it and its subtree. */
+html.cr-dark [data-cr-bgphoto="1"] {
+  filter: invert(1) !important;
+}
+
+/* Inside a restored element the page filter is already cancelled, so media must
+   NOT be inverted a third time — that would turn the photo into a negative
+   again. Higher specificity than the generic rule above, so it wins. */
+html.cr-dark [data-cr-bgphoto="1"] img,
+html.cr-dark [data-cr-bgphoto="1"] picture,
+html.cr-dark [data-cr-bgphoto="1"] video,
+html.cr-dark [data-cr-bgphoto="1"] canvas,
+html.cr-dark [data-cr-bgphoto="1"] iframe,
+html.cr-dark [data-cr-bgphoto="1"] embed,
+html.cr-dark [data-cr-bgphoto="1"] object,
+html.cr-dark [data-cr-bgphoto="1"] svg image {
+  filter: none !important;
+}
+
 /* smooth the inversion artifacts: dark scrollbars (not part of the doc, so
    they are NOT inverted — style them directly for the dark page) */
 html.cr-dark ::-webkit-scrollbar { background: #0b0f17; }
