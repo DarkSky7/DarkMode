@@ -14,6 +14,7 @@ Prints the MD5 of each package (zip != xpi by design; flavors differ).
 """
 import hashlib
 import json
+import os
 import shutil
 import sys
 import zipfile
@@ -103,7 +104,51 @@ def main() -> int:
     write_zip(xpath, manifest_override=firefox_manifest_bytes())
     for p in (zpath, xpath):
         print(f"{p.name}: MD5 {hashlib.md5(p.read_bytes()).hexdigest()}  ({p.stat().st_size} bytes)")
+
+    sync_installed(ver)
     return 0
+
+
+def sync_installed(ver: str) -> None:
+    """Copy the new build into every directory Brave has registered as unpacked.
+
+    WHY (2026-11-05): mirroring dist/DarkMode-current is not enough. The browser
+    was loading dist/DarkMode-1.0.8 — a VERSIONED folder — so building 1.0.9
+    changed nothing the browser read, and the user was told a fix had shipped
+    that they could not see. Any build that does not land in the directory the
+    browser actually reads is a no-op with a success message, so do it here.
+    """
+    sys.path.insert(0, str(ROOT / "scripts"))
+    try:
+        import importlib
+        paths_mod = importlib.import_module("loaded-ext-paths")
+    except Exception as exc:                       # noqa: BLE001
+        print(f"WARNING: cannot import loaded-ext-paths.py ({exc}); installed copies NOT synced")
+        return
+    dirs = []
+    for prof in paths_mod.default_profiles():
+        prefs = os.path.join(prof, "Secure Preferences")
+        if os.path.isfile(prefs):
+            dirs.extend(paths_mod.dirs_from_prefs(prefs))
+    seen = []
+    for d in dirs:
+        if d in seen:
+            continue
+        seen.append(d)
+        native = paths_mod.msys_to_win(d)
+        if not os.path.isdir(native):
+            print(f"skip (missing): {d}")
+            continue
+        for f in FILES:
+            src = ROOT / f
+            if src.is_file():
+                dst = Path(native) / f
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dst)
+        print(f"synced installed copy -> {d}  (now {ver})")
+    if not seen:
+        print("WARNING: no unpacked DarkMode install found; browser still has the old build")
+    print("NOW: brave://extensions -> DarkMode -> Reload, then refresh the page")
 
 
 if __name__ == "__main__":

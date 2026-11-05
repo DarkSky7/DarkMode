@@ -29,6 +29,43 @@ html.cr-dark svg image {
 html.cr-dark ::-webkit-scrollbar { background: #0b0f17; }
 html.cr-dark ::-webkit-scrollbar-thumb { background: #263046; }
 
+/* ── REPAINT ENGINE — sites that have no dark theme of their own (1.0.8) ─────
+   No filter anywhere in this block, deliberately. A colour-wheel invert turns
+   the wardrobe app's light-blue canvas rgb(148,201,239) into mud brown
+   rgb(107,54,16), and a garment catalogue cannot tolerate a hue shift on its
+   photos. So instead of inverting the page, we: (1) supply a dark canvas here,
+   then (2) let content.js repaint light surfaces and lift dark ink from
+   MEASUREMENT (startSurfaceNormaliser, shared with Gmail).
+
+   `filter: none` is load-bearing: without it a stale cr-dark class from an
+   older version, or another extension's invert, would stack on top and make
+   the page unreadable in a way that looks like our bug. */
+html.cr-repaint {
+  filter: none !important;
+  background-color: #14161a !important;
+  color-scheme: dark;   /* native scrollbars, selects and date pickers dark */
+}
+html.cr-repaint body {
+  background-color: #14161a !important;
+  color: #e8eaf0 !important;
+}
+
+/* Media keeps its true colours: never filtered, never repainted. This is the
+   whole reason this engine exists for this site — 100+ wardrobe photos. */
+html.cr-repaint img,
+html.cr-repaint picture,
+html.cr-repaint video,
+html.cr-repaint canvas,
+html.cr-repaint svg image,
+html.cr-repaint iframe,
+html.cr-repaint embed,
+html.cr-repaint object {
+  filter: none !important;
+}
+
+/* dark scrollbars to match the canvas (they are not part of the document) */
+html.cr-repaint ::-webkit-scrollbar { background: #0b0f17; }
+html.cr-repaint ::-webkit-scrollbar-thumb { background: #2b3342; }
 /* ── Gmail: surfaces Gmail's OWN dark theme leaves white (2026-10-28) ─────────
    These rules deliberately do NOT ride the invert engine above. Gmail has a
    native dark theme, so the invert filter would turn an already-dark Gmail
