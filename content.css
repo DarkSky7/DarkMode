@@ -12,9 +12,18 @@ html.cr-dark {
   background: #ffffff !important;
 }
 
-/* revert media + embedded frames so they do not look like film negatives */
+/* revert media + embedded frames so they do not look like film negatives.
+
+   NEVER list `picture` here (fixed 1.0.14). Filters compose: the page invert on
+   <html> plus our re-invert on the element cancel. A responsive image is
+   <picture><source…><img></picture> — the <img> is what paints — so listing BOTH
+   `picture` and `img` inverted those photos twice and produced a net
+   invert(1) that we then could not cancel:
+       html invert(1) + picture invert(1) + img invert(1) = net 3 → NEGATIVE
+   Measured 2026-11-05 on shop.watercool.de: 8 of 10 product thumbnails read
+   net=3 (inverted) while the plain <img> site logo read net=2 (true colour).
+   The <img> rule below already covers every picture's painted child. */
 html.cr-dark img,
-html.cr-dark picture,
 html.cr-dark video,
 html.cr-dark canvas,
 html.cr-dark iframe,

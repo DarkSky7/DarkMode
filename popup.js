@@ -1,7 +1,7 @@
 /* DarkMode popup — ask once, remember optionally. */
 'use strict';
 
-const VERSION = '1.0.13';
+const VERSION = '1.0.14';
 document.getElementById('ver').textContent = 'v' + VERSION;
 
 async function currentTab() {

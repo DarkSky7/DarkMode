@@ -22,6 +22,16 @@ import sys
 
 BRAVE_REL = os.path.join("AppData", "Local", "BraveSoftware", "Brave-Browser", "User Data")
 
+# Chromium is a second, independent consumer of this extension (2026-11-05).
+# It loads an unpacked copy from D:\Programs\DarkMode\DarkMode and sat on 1.0.3
+# through ten releases because this script only ever scanned Brave — so a
+# "shipped" fix was never in the browser the user was actually looking at.
+# Roots are (absolute path, profile-glob) pairs; missing roots are skipped.
+CHROMIUM_ROOTS = [
+    r"D:\Programs\Chromium\User Data",
+    os.path.join("AppData", "Local", "Chromium", "User Data"),
+]
+
 
 def msys_to_win(path):
     """'/c/Users/x' -> 'C:\\Users\\x'. Leaves native paths untouched."""
@@ -58,8 +68,13 @@ def dirs_from_prefs(prefs_path):
 
 def default_profiles():
     base = os.environ.get("USERPROFILE") or os.path.expanduser("~")
-    root = os.path.join(base, BRAVE_REL)
-    return [p for p in glob.glob(os.path.join(root, "*")) if os.path.isdir(p)]
+    roots = [os.path.join(base, BRAVE_REL)] + CHROMIUM_ROOTS
+    out = []
+    for root in roots:
+        if not os.path.isdir(root):
+            continue
+        out.extend(p for p in glob.glob(os.path.join(root, "*")) if os.path.isdir(p))
+    return out
 
 
 def main(argv):
