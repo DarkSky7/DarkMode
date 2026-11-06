@@ -23,12 +23,20 @@ reach. Optionally *remember* a site so it auto-darkens on future visits.
 Color-wheel inversion (`html.cr-dark { filter: invert(1) }`): white→black,
 black→white, every hue → its complement (red↔cyan, yellow↔blue) — the flip
 that reaches inline styles, canvases and `color-scheme: light` lock-ins that
-polite per-element theming can't. **Pictures are exempt**: `img / picture /
-video / canvas / iframe / embed / object / svg image` are inverted back to
-natural colors. No hue-rotate, no forced root background (user spec
+polite per-element theming can't. **Pictures are exempt**: `img / video /
+canvas / iframe / embed / object / svg image` are inverted back to natural
+colors. No hue-rotate, no forced root background (user spec
 2026-09-04 — a forced background under the filter would invert into a light
 wash). Gated entirely on an `<html>` class the content script adds — the rules
 are inert without it.
+
+> **Do not add `picture` to that list (1.0.14).** Filters compose, so the page
+> invert plus one re-invert cancel; two re-inverts do not. Responsive images are
+> `<picture><source…><img></picture>` and the `<img>` is what paints, so listing
+> both inverted those photos twice — net 3 — and every product thumbnail at a
+> shop using `<picture>` rendered as a negative (measured shop.watercool.de:
+> 8/10 thumbnails net=3 while the plain-`<img>` logo was correctly net=2).
+> The `img` rule already covers every picture's painted child.
 
 Known trade-offs of the filter tactic (accepted for the resistant case):
 - `position: fixed` headers can misbehave (a filter on the root makes them
