@@ -105,6 +105,19 @@ nothing:
    separate extensions with separate settings: each injects its own content
    script, and the "Always dark on <host>" tick you set on one does not apply to
    the others — which alone makes a correctly-installed build look inert.
+6. Both browsers, not just one. `loaded-ext-paths.py` reads the paths the
+   browsers actually registered (Brave **and** Chromium) and `package.py` copies
+   into each. Chromium sat on 1.0.3 through eleven releases because only Brave
+   was ever scanned; check the version each one reports, don't assume.
+7. AMO (for Zen/Firefox): upload `dist/DarkMode-<ver>.xpi` to the listed channel.
+   **An upload is not a signature.** The version sits at `file.status =
+   unreviewed` with `signed_date = null`, and the file URL serves the UNSIGNED
+   zip — no `META-INF/` at all, which Firefox refuses to install. The signature
+   appears only after approval, which is Mozilla's schedule, not ours.
+   `scripts/amo-watch-signature.py` polls for it, fetches the SIGNED xpi into
+   `signed/`, refreshes `darkmode-latest.xpi`, and says one line when it lands
+   (silent otherwise). Verify a downloaded xpi by its `META-INF/` entries before
+   telling anyone it's installable.
 
 History, so this isn't repeated: 1.0.4 and 1.0.5 were committed with no package
 built and no popup bump, so the browser kept loading `dist/DarkMode-1.0.3` while
