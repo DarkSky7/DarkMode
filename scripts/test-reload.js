@@ -45,12 +45,16 @@
     ok('the group really spans element kinds, not one class',
        Object.keys(kinds).length >= 4, JSON.stringify(kinds));
   } else {
-    // Documented consequence, pinned so it cannot drift silently: a rule records
-    // the colour the eye saw on a DARKENED page, so on an un-darkened page it
-    // matches nothing. Saving a rule now always remembers the host, so this only
-    // happens if the user un-remembers the site afterwards.
-    ok('un-remembered host: page stays light', !dark, 'html class="' + document.documentElement.className + '"');
-    ok('un-remembered host: rule does not match (documented)', tagged === 0, tagged + ' tagged');
+    // Mike's exact state on 2026-11-11: a tuning rule was saved by 1.0.17, which
+    // did NOT add the host to darkHosts. The reload therefore came back light and
+    // the colour rule had nothing to match. A host with rules is meant to be
+    // dark, so the tuner now repairs that itself.
+    ok('a host with saved rules is remembered automatically', dark,
+       'html class="' + document.documentElement.className + '"');
+    ok('the rule applies without the user re-saving', tagged >= 100, tagged + ' elements tagged');
+    ok('the picked paragraph is cyan again', !!para && shown(para) === '#00ffff', para ? shown(para) : 'no paragraph');
+    ok('the repair was persisted, not just applied',
+       (window.__writeLog || []).indexOf('darkHosts') !== -1, JSON.stringify(window.__writeLog || []));
   }
 
   // the observer must still catch content added long after load (SPA / infinite scroll)

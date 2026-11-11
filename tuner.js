@@ -956,7 +956,17 @@
   // Apply anything already saved for this host, without drawing anything.
   // `ready` is what onSave/onForget await: pushing a rule before this resolves
   // gets the array replaced underneath them by loadRules().
-  ready = loadRules().then(applyRules).catch(() => {});
+  //
+  // A host that HAS tuning rules is by definition meant to be dark: remembering
+  // it here repairs the state 1.0.17 could produce (rule saved, host never added
+  // to darkHosts), where the reloaded page came back light and the colour rule —
+  // recorded in the colours of a darkened page — matched nothing. Measured in
+  // Mike's live profile on 2026-11-11: two rules for quantamagazine.org, no
+  // darkHosts entry, hence "it didn't reassert … or darken".
+  ready = loadRules().then(async () => {
+    if (perHost.length) await rememberHost();
+    applyRules();
+  }).catch(() => {});
 
   // Harness hook: lets a test drive the picker without a real click.
   window.__dmTuner = {
