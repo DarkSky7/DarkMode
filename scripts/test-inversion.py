@@ -118,6 +118,21 @@ TEST_JS = r"""
   ok('fill-painted element is tagged', fillEl.getAttribute('data-dm-tone') !== null,
      String(fillEl.getAttribute('data-dm-tone')));
 
+  // ── case 3c: the user's colour must beat a site rule that outranks a plain
+  // attribute selector. `.wrap .deep p.spec1:nth-of-type(1)` is (0,4,1); a bare
+  // [data-dm-tone] is (0,1,0) and LOSES even with !important. Repetition of the
+  // attribute takes the emitted rule to (0,8,0).
+  const specEl = document.querySelector('p.spec1');
+  T.capture(specEl);
+  // .spec1 is #003366 in the source; on an inverted page it renders #ffcc99.
+  T.tone(inverted ? '#ffcc99' : '#003366', '#00ffff');
+  const specTagged = specEl.getAttribute('data-dm-tone');
+  const specComputed = getComputedStyle(specEl).color;
+  const specWant = inverted ? 'rgb(255, 0, 0)' : 'rgb(0, 255, 255)';
+  ok('our colour outranks a (0,4,1) site rule',
+     specTagged !== null && specComputed === specWant,
+     'attr=' + specTagged + ' computed=' + specComputed + ' want=' + specWant);
+
   // ── case 4: our own panel is counter-inverted ───────────────────────────
   const rootEl = document.getElementById('dm-tuner-root');
   const rf = getComputedStyle(rootEl).filter;
@@ -157,6 +172,9 @@ PAGE = """<!doctype html>
   .aX {{ color: #003366; }}
   /* ink the site paints with -webkit-text-fill-color instead of color */
   .aF {{ color: #003366; -webkit-text-fill-color: #663300; }}
+  /* a site rule with a specificity that beats a plain attribute selector:
+     (0,4,1) vs (0,1,0). The user's colour must still win. */
+  .wrap .deep p.spec1:nth-of-type(1) {{ color: #003366 !important; }}
   [data-cr-bgphoto="1"] {{ background-image: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg=="); }}
 </style>
 </head>
@@ -165,6 +183,7 @@ PAGE = """<!doctype html>
 <p class="aX">sample text one</p>
 <p class="aX">sample text two</p>
 <p class="aF">fill painted text</p>
+<div class="wrap"><div class="deep"><p class="spec1">specificity hostage</p></div></div>
 <div data-cr-bgphoto="1"><span id="inside" class="inside">restored subtree</span></div>
 <script>
   window.chrome = {{ storage: {{ sync: {{ get: function (k, cb) {{ cb && cb({{}}); }},

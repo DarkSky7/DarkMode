@@ -107,9 +107,15 @@
               parts.push('-webkit-text-fill-color:' + conv(r.color) + ' !important');
             }
             if (r.bg) parts.push('background-color:' + conv(r.bg) + ' !important');
-            /* :root + the attribute twice = specificity (0,3,0), so a site rule
-               like `.wysiwyg p{color:…!important}` (0,1,2) cannot outrank it. */
-            const sel = ':root [' + TONE_ATTR + '="' + r.id + suffix + '"][' + TONE_ATTR + ']';
+            /* Specificity by repetition. A site (or a rule saved by an older
+               version of this extension) can carry a selector like
+               `.post__content > div > … > p:nth-of-type(7)` at (0,5,6), which
+               beats a plain attribute selector (0,1,0) even with !important —
+               measured in Mike's profile, where a leftover 1.0.16 rule kept one
+               paragraph of a 153-element group a different teal. Repeating the
+               attribute costs nothing at match time and takes us to (0,8,0). */
+            const sel = ':root ' + ('[' + TONE_ATTR + '="' + r.id + suffix + '"]') +
+              ('[' + TONE_ATTR + ']').repeat(7);
             return parts.length ? sel + '{' + parts.join(';') + '}' : '';
           };
           return [emit('o', complementCss), emit('e', (x) => x)].filter(Boolean).join('\n');
