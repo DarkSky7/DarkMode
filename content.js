@@ -553,6 +553,63 @@
     bgPhotoStarted.done = true;
     let armed = false;
 
+    /* ── WHAT MAY BE "RESTORED" (1.0.21, 2026-11-11) ────────────────────────
+       Restoring a background image means double-inverting the ELEMENT, which
+       cancels the page filter for its whole subtree. That is only safe when
+       nothing in the subtree needs the page filter:
+
+       * TEXT — restored text keeps the site's light-theme ink. On the Ambient
+         Weather dashboard `a.header` (station name, 28 chars) was restored for
+         the sake of a 12px SVG carrot and rendered #313236 on a #000000 page:
+         contrast 1.64:1, i.e. invisible. Text is the thing the filter exists to
+         fix, so text always wins.
+       * VECTOR ART — an SVG is a gauge, a dial, a logo, a clock face. It is not
+         a photograph and there is nothing to preserve: restoring
+         `wind-circle.svg` kept the wind dial's WHITE DISC white on a dark
+         dashboard, and `clock-bkg-small.svg` did the same behind the sun/moon
+         widget. Both were measured on the live page after the user reported
+         "a white circle in the center of the windspeed dial".
+       * RASTERS must actually look photographic. A flat plate is UI furniture;
+         sample it and require real colourfulness before restoring. Anything
+         unmeasurable is left inverted and warned about, never silently restored.
+       ─────────────────────────────────────────────────────────────────────── */
+
+    const bgStats = new Map();   // url -> Promise<{sat} | null>
+
+    function imageColourfulness(url) {
+      if (bgStats.has(url)) return bgStats.get(url);
+      const p = fetch(url, { credentials: 'omit' })
+        .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.blob(); })
+        .then(function (b) { return createImageBitmap(b); })
+        .then(function (bm) {
+          const W = 16, H = 16;
+          const cx = new OffscreenCanvas(W, H).getContext('2d', { willReadFrequently: true });
+          cx.drawImage(bm, 0, 0, W, H);
+          const d = cx.getImageData(0, 0, W, H).data;
+          let sat = 0, n = 0;
+          for (let i = 0; i < d.length; i += 4) {
+            if (d[i + 3] < 40) continue;
+            const r = d[i] / 255, g = d[i + 1] / 255, bl = d[i + 2] / 255;
+            const hi = Math.max(r, g, bl), lo = Math.min(r, g, bl);
+            sat += hi === 0 ? 0 : (hi - lo) / hi;
+            n++;
+          }
+          if (bm.close) bm.close();
+          return { sat: n ? sat / n : 0 };
+        })
+        .catch(function (e) {
+          try { console.warn('[DarkMode] background image unmeasured, left inverted:', url, e && e.message); } catch (_) {}
+          return null;
+        });
+      bgStats.set(url, p);
+      return p;
+    }
+
+    function isVectorArt(bgImage) {
+      if (/data:image\/svg\+xml/i.test(bgImage)) return true;
+      return /\.svg(?:[?#"')]|$)/i.test(bgImage);
+    }
+
     function pass() {
       if (!isDark()) return;
       const els = document.querySelectorAll('*');
@@ -566,12 +623,23 @@
         const bi = cs.backgroundImage;
         if (!bi || bi === 'none' || bi.indexOf('url(') === -1) continue;
         if (/gradient/.test(bi)) continue;                  // not individually restorable
+        if (isVectorArt(bi)) continue;                      // gauge/dial/logo: let it invert
+        if ((el.textContent || '').trim()) continue;        // text stays in the filtered world
         const repeats = cs.backgroundRepeat !== 'no-repeat';
         const autoSize = cs.backgroundSize === 'auto';
         if (repeats && autoSize) continue;                  // decorative tile/plate
         /* A nested marker would be inverted twice and come back inverted. */
         if (el.parentElement && el.parentElement.closest('[data-cr-bgphoto="1"]')) continue;
-        el.dataset.crBgphoto = '1';
+        const m = /url\(["']?([^"')]+)["']?\)/.exec(bi);
+        if (!m) continue;
+        (function (node, url) {
+          imageColourfulness(url).then(function (st) {
+            if (!st || st.sat < 0.12) return;               // flat plate / unmeasurable
+            if (!isDark()) return;
+            if (getComputedStyle(node).backgroundImage === 'none') return;
+            node.dataset.crBgphoto = '1';
+          });
+        })(el, m[1]);
       }
     }
 
