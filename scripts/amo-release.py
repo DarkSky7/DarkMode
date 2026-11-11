@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Close the DarkMode release loop without the AMO web UI.
 
+    python scripts/amo-release.py auth         # read-only: does the key work
     python scripts/amo-release.py check        # what AMO has, and is it signed
     python scripts/amo-release.py verify       # live payload vs the local build
     python scripts/amo-release.py install      # pull the signed file, put it in
@@ -35,6 +36,8 @@ import base64
 import uuid
 import zipfile
 
+# line ending for multipart bodies (never write \\r\\n inline: it gets mangled)
+_CRLF = chr(13) + chr(10)
 API = "https://addons.mozilla.org/api/v5"
 GUID = "darkmode@landis.cc"
 SLUG = "darkmode-for-resistant-sites"
@@ -61,6 +64,23 @@ def http(url, data=None, headers=None, method=None):
 def get_json(url, headers=None):
     status, body = http(url, headers=headers)
     return status, (json.loads(body) if body else None)
+
+
+def post_with_retry(url, data, headers, attempts=3):
+    """AMO throttles repeated uploads (429 "Expected available in N seconds").
+
+    Honor the advertised wait instead of failing a release on it.
+    """
+    import re
+    for i in range(attempts):
+        status, raw = http(url, data=data, headers=headers)
+        if status != 429 or i == attempts - 1:
+            return status, raw
+        m = re.search(rb"available in (\d+)", raw)
+        wait = (int(m.group(1)) + 2) if m else 20
+        print("throttled by AMO — waiting %ds" % wait)
+        time.sleep(wait)
+    return status, raw
 
 
 # ── AMO auth ─────────────────────────────────────────────────────────────────
@@ -214,9 +234,37 @@ def cmd_install():
     return 0
 
 
+def cmd_auth():
+    """Read-only proof the key works: lists the add-ons it may publish to."""
+    env = load_env()
+    issuer = (env.get("AMO_JWT_ISSUER") or env.get("AMO_JWT_ISSUE")
+              or env.get("AMO_API_KEY") or env.get("JWT_ISSUER"))
+    secret = (env.get("AMO_JWT_SECRET") or env.get("AMO_API_SECRET")
+              or env.get("JWT_SECRET"))
+    if not issuer or not secret:
+        print("no credentials in %s" % ENV_PATH)
+        return 2
+    status, data = get_json(API + "/addons/addon/?lang=en-US",
+                            headers={"Authorization": "JWT " + jwt(issuer, secret)})
+    print("authenticated GET /addons/addon/ -> http %s" % status)
+    if status != 200:
+        print("the key pair is wrong or revoked: %s" % json.dumps(data)[:300])
+        return 1
+    print("add-ons this key can publish to: %s" % data.get("count"))
+    for a in data.get("results", []):
+        print("  %-32s %-32s %s" % (a.get("slug"), a.get("guid"), a.get("status")))
+    print("\nNOTE: an AMO key is ACCOUNT-wide, not per add-on.")
+    return 0
+
+
 def cmd_upload():
     env = load_env()
-    issuer, secret = env.get("AMO_JWT_ISSUER"), env.get("AMO_JWT_SECRET")
+    # accepted spellings — the file is hand-written and `AMO_JWT_ISSUER` once
+    # arrived as `AMO_JWT_ISSUE`, which silently disabled the whole path
+    issuer = (env.get("AMO_JWT_ISSUER") or env.get("AMO_JWT_ISSUE")
+              or env.get("AMO_API_KEY") or env.get("JWT_ISSUER"))
+    secret = (env.get("AMO_JWT_SECRET") or env.get("AMO_API_SECRET")
+              or env.get("JWT_SECRET"))
     if not issuer or not secret:
         print("no credentials at %s" % ENV_PATH)
         print("create one at https://addons.mozilla.org/en-US/developers/addon/api/key/")
@@ -237,31 +285,39 @@ def cmd_upload():
     token = jwt(issuer, secret)
     auth = {"Authorization": "JWT " + token}
 
-    # 1. upload the file
+    # 1. upload the file. AMO requires `channel` alongside the file:
+    #    "listed" = public on AMO, "unlisted" = self-distributed (signed only).
+    channel = env.get("AMO_CHANNEL", "listed")
     boundary = "----dm" + uuid.uuid4().hex
     with open(path, "rb") as fh:
         blob = fh.read()
+    kind = "Content-Disposition: form-data; name="
     body = (
-        ("--%s\r\nContent-Disposition: form-data; name=\"upload\"; filename=\"%s\"\r\n"
-         "Content-Type: application/octet-stream\r\n\r\n" % (boundary, os.path.basename(path))).encode()
-        + blob + ("\r\n--%s--\r\n" % boundary).encode()
+        ("--" + boundary + _CRLF + kind + "\"channel\"" + _CRLF + _CRLF
+         + channel + _CRLF).encode()
+        + ("--" + boundary + _CRLF + kind + "\"upload\"; filename=\""
+           + os.path.basename(path) + "\"" + _CRLF
+           + "Content-Type: application/octet-stream" + _CRLF + _CRLF).encode()
+        + blob
+        + (_CRLF + "--" + boundary + "--" + _CRLF).encode()
     )
+
     headers = dict(auth)
     headers["Content-Type"] = "multipart/form-data; boundary=" + boundary
-    status, raw = http(API + "/addons/upload/", data=body, headers=headers)
+    status, raw = post_with_retry(API + "/addons/upload/", body, headers)
     if status not in (200, 201, 202):
         print("upload failed: http %s %s" % (status, raw[:400].decode("utf-8", "replace")))
         return 1
     up = json.loads(raw)
     uid = up.get("uuid")
-    print("uploaded %s (%d bytes) uuid=%s valid=%s" % (os.path.basename(path), len(blob), uid, up.get("valid")))
-    if not up.get("valid"):
-        print("AMO rejected the file:")
-        print(json.dumps(up.get("validation", {}), indent=2)[:1500])
-        return 1
+    print("uploaded %s (%d bytes) uuid=%s" % (os.path.basename(path), len(blob), uid))
 
-    # 2. wait for server-side validation
-    for _ in range(30):
+    # 2. wait for server-side validation. AMO answers the POST immediately with
+    #    valid=false/processed=false; those are placeholders until it has
+    #    actually run the validator. Judging `valid` from the POST response
+    #    rejects every good file.
+    info = up
+    for _ in range(40):
         status, info = get_json("%s/addons/upload/%s/" % (API, uid), headers=auth)
         if status == 200 and info.get("processed"):
             break
@@ -270,12 +326,24 @@ def cmd_upload():
         print("validation did not finish; check the devhub")
         return 1
 
-    # 3. create the version
+    if not info.get("valid"):
+        print("AMO rejected the file:")
+        print(json.dumps(info.get("validation", {}), indent=2)[:1500])
+        return 1
+    print("validation: passed")
+
+    # 3. create the version. The collection endpoint takes the upload uuid;
+    #    POSTing to /versions/<ver>/ answers 405 — the per-version URL is
+    #    read/patch only. Proven by OPTIONS: the list exposes a POST action.
     payload_body = json.dumps({"upload": uid}).encode()
     h2 = dict(auth)
     h2["Content-Type"] = "application/json"
-    status, raw = http("%s/addons/addon/%s/versions/%s/" % (API, GUID, ver),
-                       data=payload_body, headers=h2)
+    status, raw = post_with_retry("%s/addons/addon/%s/versions/" % (API, GUID),
+                                 payload_body, h2)
+    if status == 409:
+        print("AMO already has version %s — nothing to publish." % ver)
+        print("bump \"version\" in manifest.json (+ popup.js VERSION), re-run scripts/package.py")
+        return cmd_verify()
     if status not in (200, 201, 202):
         print("version create failed: http %s %s" % (status, raw[:400].decode("utf-8", "replace")))
         return 1
@@ -296,7 +364,7 @@ def cmd_upload():
 
 def main():
     cmd = sys.argv[1] if len(sys.argv) > 1 else "check"
-    fn = {"check": cmd_check, "verify": cmd_verify, "install": cmd_install, "upload": cmd_upload}.get(cmd)
+    fn = {"auth": cmd_auth, "check": cmd_check, "verify": cmd_verify, "install": cmd_install, "upload": cmd_upload}.get(cmd)
     if not fn:
         print(__doc__)
         return 2
