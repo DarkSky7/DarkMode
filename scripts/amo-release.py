@@ -362,9 +362,82 @@ def cmd_upload():
     return 0
 
 
+def _bump_version(part, dry):
+    """Bump manifest.json + popup.js VERSION together.
+
+    They drifted once already: the manifest said 1.0.16 while the popup still
+    reported 1.0.15, which makes "am I running the new build?" unanswerable from
+    the UI. One function touches both.
+    """
+    mp = os.path.join(ROOT, "manifest.json")
+    raw = open(mp, encoding="utf-8").read()
+    cur = json.loads(raw)["version"]
+    major, minor, patch = (cur.split(".") + ["0", "0"])[:3]
+    if part == "major":
+        major, minor, patch = str(int(major) + 1), "0", "0"
+    elif part == "minor":
+        minor, patch = str(int(minor) + 1), "0"
+    else:
+        patch = str(int(patch) + 1)
+    new = "%s.%s.%s" % (major, minor, patch)
+    if dry:
+        print("would bump %s -> %s" % (cur, new))
+        return cur, new
+    open(mp, "w", encoding="utf-8").write(
+        raw.replace('"version": "%s"' % cur, '"version": "%s"' % new, 1))
+    pp = os.path.join(ROOT, "popup.js")
+    pr = open(pp, encoding="utf-8").read()
+    open(pp, "w", encoding="utf-8").write(
+        pr.replace("const VERSION = '%s'" % cur, "const VERSION = '%s'" % new, 1))
+    print("bumped %s -> %s (manifest.json + popup.js)" % (cur, new))
+    return cur, new
+
+
+def cmd_release():
+    """One command for the whole loop: bump, package, upload, verify, install, commit."""
+    import subprocess
+    args = sys.argv[2:]
+    part = "patch"
+    if "--bump" in args:
+        i = args.index("--bump")
+        if i + 1 < len(args):
+            part = args[i + 1]
+    if part not in ("major", "minor", "patch"):
+        print("--bump takes major | minor | patch")
+        return 2
+    dry = "--dry-run" in args
+
+    status, data = get_json("%s/addons/addon/%s/versions/?page_size=1" % (API, GUID))
+    newest = data["results"][0]["version"] if (data and data.get("results")) else "?"
+    print("newest on AMO: %s" % newest)
+
+    cur, new = _bump_version(part, dry)
+    if dry:
+        print("would run  : scripts/package.py")
+        print("would upload: dist/DarkMode-%s-firefox.xpi" % new)
+        print("would verify then install into every Firefox/Zen profile")
+        print("would commit: release %s" % new)
+        return 0
+
+    rc = subprocess.call([sys.executable, os.path.join(ROOT, "scripts", "package.py")])
+    if rc != 0:
+        print("packaging failed -- version files are already bumped to %s, fix and re-run" % new)
+        return rc
+    rc = cmd_upload()
+    if rc != 0:
+        return rc
+    rc = cmd_install()
+    subprocess.call(["git", "-C", ROOT, "add", "-A"])
+    subprocess.call(["git", "-C", ROOT, "commit", "-m", "release: %s" % new])
+    print("\nrelease %s done" % new)
+    return rc
+
+
 def main():
     cmd = sys.argv[1] if len(sys.argv) > 1 else "check"
-    fn = {"auth": cmd_auth, "check": cmd_check, "verify": cmd_verify, "install": cmd_install, "upload": cmd_upload}.get(cmd)
+    fn = {"auth": cmd_auth, "check": cmd_check, "verify": cmd_verify,
+          "install": cmd_install, "upload": cmd_upload,
+          "release": cmd_release}.get(cmd)
     if not fn:
         print(__doc__)
         return 2
