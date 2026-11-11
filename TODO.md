@@ -1,5 +1,27 @@
 # DarkMode — TODO / workstream tracker
 
+## 2026-11-11 — release automation (ends the manual devhub loop)
+
+- [x] **`scripts/amo-release.py`** — four commands:
+      `check` prints every AMO version and says whether the local manifest is
+      already published (that is the "Version X already exists" error, without
+      opening a browser); `verify` downloads the signed file and compares the
+      payload to the build; `install` copies the signed file into every
+      Firefox/Zen profile and names the ones locked by a running browser;
+      `upload` does upload -> poll validation -> create version -> wait for
+      signing -> verify, unattended.
+- [ ] **`upload` needs an AMO API key** at `~/.ssh/amo-darkmode.env`
+      (`AMO_JWT_ISSUER`, `AMO_JWT_SECRET`); mint it once at
+      https://addons.mozilla.org/en-US/developers/addon/api/key/. Until then the
+      other three commands already run the loop from this side.
+- [x] **AMO re-serializes `manifest.json` while signing** — that, not an ad-hoc
+      rebuild, is why the signed file shows `\u2014` where the local build has a
+      literal em dash. Proven by comparing 1.0.14 (built before today's changes)
+      and 1.0.16: parsed manifests equal, all other files byte-identical.
+- [x] Zen honours `xpinstall.signatures.required=false` (community-verified), so
+      unsigned sideloading is possible — but it disables signature checking for
+      **every** extension in that profile, so AMO stays the default path.
+
 ## 2026-11-11 — 1.0.16: the tuner speaks RENDERED colour
 
 Reported by Mike on quantamagazine.org: picked a red, got a **cyan swatch**, and
@@ -129,10 +151,12 @@ the heading text stayed white.
         * Developer-hub URLs are keyed by **slug**, not GUID:
           `/developers/addon/darkmode/` → "Oops! Not allowed";
           `/developers/addon/darkmode-for-resistant-sites/` → correct.
-        * Drift note: AMO's signed 1.0.15 was produced by an ad-hoc rebuild, not
-          by `scripts/package.py`. Payload is identical except `manifest.json`
-          escaping the em dash as `\u2014` in `name` (semantically the same
-          string). Next release should upload the repo-built `.xpi`.
+        * **CORRECTION (same day):** the `\u2014` difference is NOT drift. AMO
+          re-serializes `manifest.json` while signing — 1.0.14, built before
+          any of today's changes, shows the same escaped dash, and the parsed
+          manifests are equal. `scripts/amo-release.py verify` now compares the
+          manifest parsed and everything else byte-for-byte, and reports the
+          signed file's payload as identical.
 - [ ] Tune a real resistant site (Gmail is DENY-listed by design) and export the
       rules — that export is the starting point for a real palette instead of
       per-element choices.
