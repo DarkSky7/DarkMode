@@ -8,9 +8,13 @@
  *
  *   node cdp-eval.mjs --url URL [--inject name=path]... --test test.js
  *                     [--settle 2000] [--width 1400] [--height 1000]
+ *                     [--cold --page-script name=path]... [--shot out.png]
  *
- * Exit code 0 whenever the evaluation returned; the test's own PASS/FAIL lines
- * are the verdict (parsed by test-tone-live.py).
+ * --inject passes a file through window.__SRC for the test to use (page already
+ * loaded). --cold instead launches on about:blank, registers --page-script
+ * files with Page.addScriptToEvaluateOnNewDocument in the order given, and only
+ * then navigates — which is the ONLY faithful way to reproduce document_start
+ * behaviour (allowlist reads, first-sweep timing, storage races).
  */
 import { spawn } from 'node:child_process';
 import { readFileSync, existsSync, mkdtempSync, rmSync } from 'node:fs';
@@ -27,12 +31,20 @@ const settle = parseInt(arg('settle', '1800'), 10);
 const width = parseInt(arg('width', '1400'), 10);
 const height = parseInt(arg('height', '1000'), 10);
 const testFile = arg('test');
-const injects = [];
+const cold = argv.includes('--cold');
+const injects = [];       // [name, path] -> window.__SRC[name]
+const pageScripts = [];   // [name, path] -> document_start, in order
+const styles = [];        // [name, path] -> <style> at document_start
 for (let i = 0; i < argv.length; i++) {
-  if (argv[i] === '--inject') {
+  if (argv[i] === '--inject' || argv[i] === '--page-script' || argv[i] === '--style') {
     const spec = argv[i + 1] || '';
     const eq = spec.indexOf('=');
-    if (eq > 0) injects.push([spec.slice(0, eq), spec.slice(eq + 1)]);
+    if (eq > 0) {
+      const entry = [spec.slice(0, eq), spec.slice(eq + 1)];
+      if (argv[i] === '--inject') injects.push(entry);
+      else if (argv[i] === '--page-script') pageScripts.push(entry);
+      else styles.push(entry);
+    }
   }
 }
 
@@ -48,7 +60,7 @@ const chrome = spawn(CHROME, [
   '--remote-debugging-port=0',
   '--user-data-dir=' + profile,
   '--window-size=' + width + ',' + height,
-  url,
+  cold ? 'about:blank' : url,
 ], { stdio: ['ignore', 'ignore', 'pipe'] });
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -125,6 +137,43 @@ try {
   const port = await portFromProfile();
   const target = await pageTarget(port);
   const cdp = await connect(target.webSocketDebuggerUrl);
+
+  if (cold) {
+    // Register BEFORE the document exists, in the order given, then navigate —
+    // the same ordering the browser gives manifest content_scripts.
+    //
+    // addScriptToEvaluateOnNewDocument fires EARLIER than document_start: the
+    // document can have no documentElement yet, and both content.js and tuner.js
+    // create nodes on load (which throws on a null documentElement). A real
+    // document_start content script always has documentElement, so gate on it —
+    // without eval, in case the page's CSP blocks it.
+    await cdp.send('Page.enable');
+    await cdp.send('Runtime.enable');
+    // CSS first: manifest content_scripts inject it alongside the JS, and
+    // without it `html.cr-dark` has no filter at all — which silently makes the
+    // page "not inverted" and the colour sweep match nothing.
+    for (const [name, path] of styles) {
+      const css = readFileSync(path, 'utf8');
+      const boot = '(function(){var css=' + JSON.stringify(css) + ';' +
+        'function go(){var s=document.createElement("style");s.textContent=css;' +
+        '(document.head||document.documentElement).appendChild(s);}' +
+        'if(document.documentElement){go();}else{var mo=new MutationObserver(function(){' +
+        'if(document.documentElement){mo.disconnect();go();}});' +
+        'mo.observe(document,{childList:true,subtree:true});}})();';
+      await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: boot });
+      console.error('registered style ' + name + ' at document_start');
+    }
+    for (const [name, path] of pageScripts) {
+      const src = readFileSync(path, 'utf8');
+      const guarded = '(function(){var run=function(){\n' + src + '\n};\n' +
+        'if(document.documentElement){run();}else{' +
+        'var mo=new MutationObserver(function(){if(document.documentElement){mo.disconnect();run();}});' +
+        'mo.observe(document,{childList:true,subtree:true});}})();';
+      const r = await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: guarded });
+      console.error('registered ' + name + ' at document_start (' + (r && r.identifier) + ')');
+    }
+    await cdp.send('Page.navigate', { url });
+  }
 
   for (let i = 0; i < 300; i++) {
     const ready = await evalIn(cdp, 'document.readyState', false).catch(() => 'loading');

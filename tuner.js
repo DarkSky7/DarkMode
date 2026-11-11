@@ -30,8 +30,14 @@
   let hi = null, perHost = [], globalRules = [], lastPick = null, mirrorEl = null, groupsEl = null;
   let lastGroups = new Map(), lastMine = '', lastKey = '', seq = 0, mo = null, moTimer = null;
   let ready = null;   // resolves once storage has been read; saves await it
-  /* Baseline rendered colour per element, taken before any tone rule touched it.
-     Without this a second sweep would see our own cyan and match nothing. */
+  let pendingRoots = [];
+  /* Baseline per element, WITH the invert parity it was measured at.
+     Two bugs live here. (1) After the first sweep the element's own colour IS
+     the rule's colour, so a second sweep must compare against the original.
+     (2) The baseline is only true for the parity it was taken at: a page that
+     gets its `filter: invert` applied late (allowlist read, or "darken this
+     page" clicked after a sweep) would otherwise keep the un-inverted colour
+     forever and the saved rule would never match again. */
   const toneBase = new WeakMap();
 
   /* ───────────────────────────── storage (callback or promise) ───────── */
@@ -634,9 +640,10 @@
   /** Rendered (eye) colour of an element as #rrggbb, or '' if not measurable. */
   function rendersOf(el) {
     if (!el || el.nodeType !== 1) return '';
-    if (toneBase.has(el)) return toneBase.get(el);      // pre-tone baseline
+    const tagged = el.hasAttribute(TONE_ATTR);
+    const cached = toneBase.get(el);
     let cs;
-    try { cs = getComputedStyle(el); } catch (e) { return ''; }
+    try { cs = getComputedStyle(el); } catch (e) { return tagged && cached ? cached.c : ''; }
     /* The visible ink is `-webkit-text-fill-color` when the site sets it — 26
        elements on the Quanta article paint #1a1a1a that way, and writing only
        `color` left them unchanged. A TRANSPARENT fill is a background-clip
@@ -644,13 +651,36 @@
        destroy the effect, so they are not measurable and are skipped. */
     const ink = cs.webkitTextFillColor || cs.color;
     const rgb = parseRGB(ink);
-    if (!rgb || rgb[3] < 0.999) return '';
-    const shown = invertDepth(el) % 2 === 1 ? [255 - rgb[0], 255 - rgb[1], 255 - rgb[2]] : rgb;
+    if (!rgb || rgb[3] < 0.999) return tagged && cached ? cached.c : '';
+    /* CACHE RULES, and getting them wrong is what made a saved rule half-apply
+       on reload. While an element carries OUR attribute its live colour is our
+       paint, so the baseline is the only truth. While it does not, the live
+       colour is the PAGE's — measure it, even if a baseline exists: the first
+       sweeps run during parsing, before the site's own stylesheet has been
+       applied, so an early baseline is often the browser default and would
+       otherwise stick forever (measured: 87 of 200 elements tagged). */
+    if (tagged && cached) return cached.c;
+    const parity = invertDepth(el) % 2;
+    const shown = parity === 1
+      ? [255 - rgb[0], 255 - rgb[1], 255 - rgb[2]]
+      : [rgb[0], rgb[1], rgb[2]];
     const h = (n) => n.toString(16).padStart(2, '0');
-    return '#' + h(shown[0]) + h(shown[1]) + h(shown[2]);
+    const hex = '#' + h(shown[0]) + h(shown[1]) + h(shown[2]);
+    // Only remember colours that are the PAGE's, never the ones we painted.
+    if (!tagged) toneBase.set(el, { c: hex, p: parity });
+    return hex;
   }
 
+  /* Elements that own text but never PAINT it. A <script> holds its source as a
+     text node, so without this filter the sweep tags every analytics blob on the
+     page and the panel's "208 elements" is inflated by 12 widgets the user can
+     never see. Measured on quantamagazine: 193 real + 12 script + 1 audio. The
+     `i` flag matters: SVG's <title> — 28 of them on that page, one per icon —
+     reports a LOWERCASE tagName, while HTML's reports uppercase. */
+  const NON_TEXT_TAGS = /^(script|style|noscript|template|title|meta|link|base|head|path|defs)$/i;
+
   function ownsText(el) {
+    if (NON_TEXT_TAGS.test(el.tagName)) return false;
     for (let n = el.firstChild; n; n = n.nextSibling) {
       if (n.nodeType === 3 && n.nodeValue && n.nodeValue.trim()) return true;
     }
@@ -689,7 +719,6 @@
       if (el.id === ROOT_ID || !ownsText(el)) continue;
       const base = rendersOf(el);
       if (!base) continue;
-      if (!toneBase.has(el) && !el.hasAttribute(TONE_ATTR)) toneBase.set(el, base);
       const hit = rules.filter((r) => sameHex(r.from, base))[0];
       const want = hit ? hit.id + (invertDepth(el) % 2 === 1 ? 'o' : 'e') : '';
       const has = el.getAttribute(TONE_ATTR);
@@ -703,24 +732,45 @@
     return tagged;
   }
 
-  /* Pages fill in after document_start and single-page sites swap whole
+  /* Pages fill in AFTER document_start and single-page sites swap whole
      sections. Watch for NEW nodes only (not attributes — we write one, which
-     would loop) and re-tag after the burst settles. */
+     would loop).
+
+     THE BUG THIS REPLACED (1.0.18, reported by Mike as "saved the colour, reloaded,
+     nothing came back"): the callback did `clearTimeout(moTimer)` on every batch
+     and waited 250 ms for quiet before sweeping. A busy page never goes quiet —
+     quantamagazine kept mutating past the 3 s mark — so the timer was reset
+     forever and the first sweep never ran. Measured on a real cold load: 0
+     elements tagged, and a manual sweep the same instant tagged 193. Never
+     reset a timer that is doing work; coalesce without dropping. */
   function ensureObserve() {
     if (mo || !window.MutationObserver || !document.documentElement) return;
     mo = new MutationObserver((recs) => {
       if (!toneRules().length) return;
-      clearTimeout(moTimer);
-      moTimer = setTimeout(() => {
-        for (let i = 0; i < recs.length; i++) {
-          const added = recs[i].addedNodes;
-          for (let j = 0; j < added.length; j++) {
-            if (added[j].nodeType === 1 && added[j].id !== ROOT_ID) sweepTone(added[j]);
-          }
+      for (let i = 0; i < recs.length; i++) {
+        const added = recs[i].addedNodes;
+        for (let j = 0; j < added.length; j++) {
+          if (added[j].nodeType === 1 && added[j].id !== ROOT_ID) pendingRoots.push(added[j]);
         }
-      }, 250);
+      }
+      scheduleSweep();
     });
     mo.observe(document.documentElement, { childList: true, subtree: true });
+    // Belt and braces: the parser's own insertions arrive as mutations, but a
+    // document-lifecycle sweep cannot be starved by anything.
+    ['DOMContentLoaded', 'load'].forEach((ev) => {
+      document.addEventListener(ev, () => sweepTone(), true);
+    });
+  }
+
+  function scheduleSweep() {
+    if (moTimer) return;                 // one pending sweep, never postponed
+    moTimer = setTimeout(() => {
+      moTimer = null;
+      const roots = pendingRoots;
+      pendingRoots = [];
+      for (let i = 0; i < roots.length; i++) sweepTone(roots[i]);
+    }, 120);
   }
 
   /** Rendered colour -> how many text elements show it (the "dominant" one wins). */
@@ -801,6 +851,35 @@
   }
 
   /* ────────────────────────────────── save / forget / export ─────────── */
+  /* "Save for this host" has to mean the page comes back the way you left it.
+     A tuning rule on a site that is not in `darkHosts` is a trap: on reload the
+     page is not inverted, so the rule's colour (recorded as the colour the eye
+     saw on a DARKENED page) matches nothing — which is exactly what Mike hit,
+     "or darken". So saving a rule also remembers the site, using the same key
+     content.js reads, and switches the engine on now if it is off. */
+  async function rememberHost() {
+    const isDark = () => document.documentElement.classList.contains('cr-dark') ||
+                         document.documentElement.classList.contains('cr-repaint');
+    try {
+      chrome.storage.sync.get('darkHosts', (got) => {
+        const hosts = (got && got.darkHosts) || {};
+        if (hosts[host]) return;
+        hosts[host] = true;
+        chrome.storage.sync.set({ darkHosts: hosts });
+      });
+    } catch (e) { /* no storage in a bare harness */ }
+    if (!isDark()) {
+      if (window.__darkMode && typeof window.__darkMode.apply === 'function') {
+        window.__darkMode.apply();               // the engine's own apply()
+      } else {
+        document.documentElement.classList.add('cr-dark');
+      }
+      syncUiFilter();
+      return true;
+    }
+    return false;
+  }
+
   async function onSave() {
     if (ready) await ready;          // storage read must precede the push, or
     if (!pending || !ruleKey(pending)) return;   // loadRules clobbers perHost
@@ -811,10 +890,13 @@
     const i = perHost.findIndex((r) => ruleKey(r) === k);
     if (i >= 0) perHost[i] = rule; else perHost.push(rule);
     await persist();
+    const darkened = await rememberHost();     // the page must come back dark too
     pending = null;
-    applyRules();
+    applyRules();                              // parity may have just changed
     renderRules();
-    infoEl.textContent = 'Saved for ' + host + ': ' + (rule.match === 'color' ? 'all text ' + rule.from : rule.sel);
+    infoEl.textContent = 'Saved for ' + host + ': ' +
+      (rule.match === 'color' ? 'all text ' + rule.from : rule.sel) +
+      (darkened ? '  ·  site now darkened + remembered' : '  ·  site already remembered');
   }
 
   async function onForget() {

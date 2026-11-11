@@ -88,13 +88,17 @@
   T.sweep(); T.sweep();
   ok('re-sweep does not lose or duplicate tags', T.state().tagged === before, before + ' -> ' + T.state().tagged);
 
-  // ── 5. persistence
+  // ── 5. persistence: the rule AND the host's "remembered" flag
   await T.save();
-  const saved = writes[writes.length - 1] || {};
+  const saved = writes.filter((w) => w && w.tuneRulesByHost).pop() || {};
+  const hostWrite = writes.filter((w) => w && w.darkHosts).pop() || {};
   const rules = (saved.tuneRulesByHost || {})['quantamagazine.org'] || [];
   ok('rule persisted as a colour match',
      rules.length === 1 && rules[0].match === 'color' && rules[0].from === '#e5e5e5' && !!rules[0].id,
      JSON.stringify(rules));
+  ok('saving also remembers the site, so a reload comes back dark',
+     !!(hostWrite.darkHosts || {})['quantamagazine.org'],
+     JSON.stringify(hostWrite.darkHosts || null));
   ok('still applied after saving', T.state().tagged === before, 'tagged=' + T.state().tagged);
 
   // ── 6. removing the rule reverts every element
