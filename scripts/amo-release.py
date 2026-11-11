@@ -28,6 +28,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -363,11 +364,13 @@ def cmd_upload():
 
 
 def _bump_version(part, dry):
-    """Bump manifest.json + popup.js VERSION together.
+    """Bump every place the version is written: manifest.json, popup.js and content.js.
 
-    They drifted once already: the manifest said 1.0.16 while the popup still
-    reported 1.0.15, which makes "am I running the new build?" unanswerable from
-    the UI. One function touches both.
+    They drifted twice already: the manifest said 1.0.16 while the popup still
+    reported 1.0.15, and content.js sat on 1.0.14 for three releases (it is what
+    the popup prints in some paths, so "am I running the new build?" becomes
+    unanswerable from the UI). One function touches all three, then re-reads
+    them and refuses to continue if any did not take.
     """
     mp = os.path.join(ROOT, "manifest.json")
     raw = open(mp, encoding="utf-8").read()
@@ -385,11 +388,21 @@ def _bump_version(part, dry):
         return cur, new
     open(mp, "w", encoding="utf-8").write(
         raw.replace('"version": "%s"' % cur, '"version": "%s"' % new, 1))
-    pp = os.path.join(ROOT, "popup.js")
-    pr = open(pp, encoding="utf-8").read()
-    open(pp, "w", encoding="utf-8").write(
-        pr.replace("const VERSION = '%s'" % cur, "const VERSION = '%s'" % new, 1))
-    print("bumped %s -> %s (manifest.json + popup.js)" % (cur, new))
+    # popup.js and content.js both carry `const VERSION = '<x>'`; regex, not a
+    # literal replace, so a stale value gets corrected instead of silently kept.
+    for fn in ("popup.js", "content.js"):
+        p = os.path.join(ROOT, fn)
+        src = open(p, encoding="utf-8").read()
+        dst = re.sub(r"const VERSION = '[^']*'", "const VERSION = '%s'" % new, src, count=1)
+        if dst == src:
+            print("ERROR: no VERSION line in %s" % fn)
+            return cur, new
+        open(p, "w", encoding="utf-8").write(dst)
+    for fn in ("manifest.json", "popup.js", "content.js"):
+        if new not in open(os.path.join(ROOT, fn), encoding="utf-8").read():
+            print("ERROR: %s does not carry version %s after bump" % (fn, new))
+            sys.exit(3)
+    print("bumped %s -> %s (manifest.json + popup.js + content.js)" % (cur, new))
     return cur, new
 
 

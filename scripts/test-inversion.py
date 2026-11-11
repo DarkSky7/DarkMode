@@ -101,6 +101,23 @@ TEST_JS = r"""
   ok('capture seeds rendered colour',
      seeded === (inverted ? '#ffcc99' : '#003366'), seeded);
 
+  // ── case 3b: ink the site paints with -webkit-text-fill-color ───────────
+  // .aF is #663300 by fill and #003366 by color: grouping on `color` would put
+  // it in the wrong group and writing only `color` would not move its ink.
+  const fillEl = document.querySelector('p.aF');
+  T.capture(fillEl);
+  const inkList = T.groups().map((g) => g.colour);
+  const fFrom = inverted ? '#99ccff' : '#663300';           // #663300 is the fill
+  ok('ink measured from text-fill-color, not color',
+     inkList.indexOf(fFrom) !== -1, inkList.join(' '));
+  T.tone(fFrom, '#00ffff');
+  const cssF = T.state().css;
+  ok('tone rule writes -webkit-text-fill-color',
+     /-webkit-text-fill-color:(#ff0000|#00ffff) !important/.test(cssF),
+     (cssF.split('\n')[0] || '').slice(0, 120));
+  ok('fill-painted element is tagged', fillEl.getAttribute('data-dm-tone') !== null,
+     String(fillEl.getAttribute('data-dm-tone')));
+
   // ── case 4: our own panel is counter-inverted ───────────────────────────
   const rootEl = document.getElementById('dm-tuner-root');
   const rf = getComputedStyle(rootEl).filter;
@@ -138,6 +155,8 @@ PAGE = """<!doctype html>
   #probe {{ position: absolute; left: 40px; top: 40px; width: 160px; height: 160px;
             background: #ffffff; }}
   .aX {{ color: #003366; }}
+  /* ink the site paints with -webkit-text-fill-color instead of color */
+  .aF {{ color: #003366; -webkit-text-fill-color: #663300; }}
   [data-cr-bgphoto="1"] {{ background-image: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg=="); }}
 </style>
 </head>
@@ -145,6 +164,7 @@ PAGE = """<!doctype html>
 <div id="probe"></div>
 <p class="aX">sample text one</p>
 <p class="aX">sample text two</p>
+<p class="aF">fill painted text</p>
 <div data-cr-bgphoto="1"><span id="inside" class="inside">restored subtree</span></div>
 <script>
   window.chrome = {{ storage: {{ sync: {{ get: function (k, cb) {{ cb && cb({{}}); }},

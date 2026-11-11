@@ -20,13 +20,19 @@
   window.__dmTunerLoaded = true;
 
   const ROOT_ID = 'dm-tuner-root';
+  const TONE_ATTR = 'data-dm-tone';
   const sync = (chrome.storage && chrome.storage.sync) || null;
   const host = location.hostname.replace(/^www\./, '');
 
   let root = null, shadow = null, styleEl = null, panel = null;
   let picking = false, pending = null, infoEl = null, contrastEl = null, scopeSel = null, customInput = null;
   let txtInput = null, bgInput = null, bgChk = null, listEl = null, exportEl = null;
-  let hi = null, perHost = [], globalRules = [], lastPick = null, mirrorEl = null;
+  let hi = null, perHost = [], globalRules = [], lastPick = null, mirrorEl = null, groupsEl = null;
+  let lastGroups = new Map(), lastMine = '', lastKey = '', seq = 0, mo = null, moTimer = null;
+  let ready = null;   // resolves once storage has been read; saves await it
+  /* Baseline rendered colour per element, taken before any tone rule touched it.
+     Without this a second sweep would see our own cyan and match nothing. */
+  const toneBase = new WeakMap();
 
   /* ───────────────────────────── storage (callback or promise) ───────── */
   function sget(keys) {
@@ -56,8 +62,10 @@
   async function loadRules() {
     const data = await sget({ tuneRulesByHost: {}, tuneRulesGlobal: [] });
     const map = data.tuneRulesByHost || {};
-    perHost = Array.isArray(map[host]) ? map[host].slice() : [];
-    globalRules = Array.isArray(data.tuneRulesGlobal) ? data.tuneRulesGlobal.slice() : [];
+    const fix = (list) => (Array.isArray(list) ? list.map((r) =>
+      (r && r.match === 'color' && !r.id) ? Object.assign({}, r, { id: uid() }) : r) : []);
+    perHost = fix(map[host]);
+    globalRules = fix(data.tuneRulesGlobal);
     return { perHost, globalRules };
   }
 
@@ -74,8 +82,32 @@
      see invertDepth() below. */
   function cssText(rules) {
     return rules
-      .filter((r) => r && r.sel)
+      .filter((r) => r && (r.sel || (r.match === 'color' && r.from && r.id)))
       .map((r) => {
+        if (r.match === 'color') {
+          /* A tone rule has no selector at all: elements are tagged by
+             sweepTone() with data-dm-tone="<ruleId><o|e>", the trailing letter
+             being that element's OWN invert parity. One selector for both
+             parities would double-invert restored-photo subtrees, and a real
+             selector cannot express "every element showing colour X" anyway —
+             CSS has no colour query. */
+          const emit = (suffix, conv) => {
+            const parts = [];
+            if (r.color) {
+              parts.push('color:' + conv(r.color) + ' !important');
+              // `color` alone does not move ink the site painted with
+              // -webkit-text-fill-color, which is a real thing on WordPress-y
+              // themes (quantamagazine: 26 elements).
+              parts.push('-webkit-text-fill-color:' + conv(r.color) + ' !important');
+            }
+            if (r.bg) parts.push('background-color:' + conv(r.bg) + ' !important');
+            /* :root + the attribute twice = specificity (0,3,0), so a site rule
+               like `.wysiwyg p{color:…!important}` (0,1,2) cannot outrank it. */
+            const sel = ':root [' + TONE_ATTR + '="' + r.id + suffix + '"][' + TONE_ATTR + ']';
+            return parts.length ? sel + '{' + parts.join(';') + '}' : '';
+          };
+          return [emit('o', complementCss), emit('e', (x) => x)].filter(Boolean).join('\n');
+        }
         const odd = invertDepthFor(r.sel) % 2 === 1;
         const color = r.color ? (odd ? complementCss(r.color) : r.color) : '';
         const bg = r.bg ? (odd ? complementCss(r.bg) : r.bg) : '';
@@ -96,6 +128,12 @@
     }
     const all = globalRules.concat(perHost).concat(pending ? [pending] : []);
     styleEl.textContent = cssText(all);
+    // Tag first? No: the stylesheet must exist before tagging, so the attribute
+    // immediately has a rule to attach to. Sweep after writing, then re-sweep
+    // anything the observer sees appear later.
+    syncUiFilter();
+    sweepTone();
+    ensureObserve();
   }
 
   /* ───────────────────────────────────────── colour maths ────────────── */
@@ -201,6 +239,7 @@
     pickBtn.addEventListener('click', () => togglePick(pickBtn));
 
     infoEl = mk('div', { cls: 'dim', text: 'No element selected.', id: 'info' });
+    groupsEl = mk('div', { cls: 'dim', text: '', id: 'groups' });
     contrastEl = mk('div', { cls: 'dim', text: '', id: 'contrast' });
     mirrorEl = mk('div', { cls: 'dim', text: '', id: 'mirror' });
 
@@ -242,6 +281,7 @@
     panel.appendChild(head);
     panel.appendChild(mk('div', {}, [pickBtn]));
     panel.appendChild(infoEl);
+    panel.appendChild(groupsEl);
     panel.appendChild(mk('div', { cls: 'row' }, [mk('span', { cls: 'lab', text: 'apply' }), scopeSel]));
     panel.appendChild(customInput);
     panel.appendChild(mk('div', { cls: 'row' }, [
@@ -342,19 +382,52 @@
 
   function capture(el) {
     lastPick = el;
-    const cs = getComputedStyle(el);
+    const mine = rendersOf(el) || renderedAs(rgbToHex(getComputedStyle(el).color), el);
+    lastMine = mine;
+    lastGroups = colourGroups();
+    const groups = sortedGroups();
+    const dom = groups.length ? groups[0][0] : '';
+    const mineGroup = lastGroups.get(mine) || { n: 0, chars: 0, tags: {} };
+    const domGroup = dom ? lastGroups.get(dom) : null;
+
     const classes = [...el.classList]
       .filter((c) => !/^(cr-|dm-)/.test(c))
       .map((c) => ({ c: c, n: document.querySelectorAll('.' + CSS.escape(c)).length }))
       .sort((a, b) => a.n - b.n);
 
     const tag = el.tagName.toLowerCase();
-    infoEl.textContent = tag + (el.id ? '#' + el.id : '') +
-      (classes.length ? '  ·  ' + classes.length + ' class(es)' : '') + '  ·  ' + classes.map((x) => '.' + x.c + '(' + x.n + ')').join(' ');
+    infoEl.textContent = tag + (el.id ? '#' + el.id : '') + (classes.length
+      ? '  ·  ' + classes.length + ' class(es)  ·  ' +
+        classes.map((x) => '.' + x.c + '(' + x.n + ')').join(' ')
+      : '  ·  no class');
 
-    // scope options: this element, then each class by ascending element count
+    // the sweep the user asked for: what colour is this, and how much text shares it
+    if (groupsEl) {
+      const n = (h) => (lastGroups.get(h) ? lastGroups.get(h).n : 0);
+      groupsEl.textContent = groups.length
+        ? (dom === mine
+            ? n(dom) + ' elements show ' + dom + '  ·  ' + groups.length + ' text colours'
+            : 'dominant ' + dom + ' ×' + n(dom) + '  ·  this ' + mine + ' ×' + n(mine) +
+              '  ·  ' + groups.length + ' colours')
+        : '';
+    }
+
+    // scope options: this element, this colour, the dominant colour, classes, custom
     while (scopeSel.firstChild) scopeSel.removeChild(scopeSel.firstChild);
     scopeSel.appendChild(mk('option', { value: '__this', text: 'this element only' }));
+    if (mineGroup.n >= 2) {
+      scopeSel.appendChild(mk('option', {
+        value: '__tone',
+        text: '≈ all text ' + mine + '  → ' + mineGroup.n + ' element' + (mineGroup.n === 1 ? '' : 's') +
+              (mine === dom ? ' (dominant)' : ' (this colour)')
+      }));
+    }
+    if (dom && dom !== mine && domGroup && domGroup.n >= 2) {
+      scopeSel.appendChild(mk('option', {
+        value: '__tone:' + dom,
+        text: '≈ all text ' + dom + '  → ' + domGroup.n + ' (dominant)'
+      }));
+    }
     classes.forEach((x) => {
       scopeSel.appendChild(mk('option', {
         value: '.' + x.c,
@@ -363,18 +436,27 @@
     });
     scopeSel.appendChild(mk('option', { value: '__custom', text: 'custom selector…' }));
 
-    // default scope: the class with the largest count that is still specific
+    /* Default scope. A class is preferred only when it actually reaches
+       further than a single element — a page where every paragraph carries its
+       own class makes the class list useless, and the colour group is the only
+       thing that describes "the body text". */
     const best = classes.filter((x) => x.n > 1 && x.n <= 200).pop() || classes[0];
-    pending = {
-      sel: best ? '.' + best.c : uniqueSelectorFor(el),
-      color: renderedAs(rgbToHex(cs.color), el),
-      bg: ''
-    };
-    scopeSel.value = best ? '.' + best.c : '__this';
+    let defVal;
+    if (mineGroup.n >= 8 && mine === dom && (!best || best.n < mineGroup.n * 0.5)) defVal = '__tone';
+    else if (best) defVal = '.' + best.c;
+    else if (mineGroup.n >= 8) defVal = '__tone';
+    else defVal = '__this';
+
+    pending = null;
+    txtInput.value = mine;               // seed the knob with what this element shows
+    shadow.getElementById('txthex').textContent = mine;
+    if (defVal.indexOf('__tone:') === 0) applyTone(defVal.slice(7));
+    else if (defVal === '__tone') applyTone(mine);
+    else setPending(defVal === '__this' ? uniqueSelectorFor(el) : defVal);
+    scopeSel.value = defVal;
+
     customInput.hidden = true;
     customInput.value = '';
-    txtInput.value = pending.color;
-    shadow.getElementById('txthex').textContent = pending.color;
     renderRules();
     update();
   }
@@ -382,7 +464,11 @@
   function onScopeChange() {
     const v = scopeSel.value;
     customInput.hidden = v !== '__custom';
-    if (v === '__this') {
+    if (v === '__tone') {
+      applyTone(lastMine);
+    } else if (v.indexOf('__tone:') === 0) {
+      applyTone(v.slice(7));
+    } else if (v === '__this') {
       const el = lastPick;
       setPending(el ? uniqueSelectorFor(el) : '');
     } else if (v === '__custom') {
@@ -392,10 +478,33 @@
     }
   }
 
-  function setPending(sel) {
-    if (!pending) pending = { sel: sel, color: txtInput.value, bg: bgChk.checked ? '' : bgInput.value };
-    else pending.sel = sel;
+  /** Switch `pending` to a colour-group rule: "every element showing `from`". */
+  function applyTone(from) {
+    const color = (pending && pending.color) || txtInput.value || '#00ffff';
+    const bg = pending ? (pending.bg || '') : (bgChk.checked ? '' : bgInput.value);
+    pending = {
+      id: (pending && pending.match === 'color' && pending.id) || uid(),
+      match: 'color',
+      from: from,
+      color: color,
+      bg: bg || ''
+    };
+    lastKey = ruleKey(pending);
     update();
+  }
+
+  function setPending(sel) {
+    const color = (pending && pending.color) || txtInput.value || '#00ffff';
+    const bg = pending ? (pending.bg || '') : (bgChk.checked ? '' : bgInput.value);
+    pending = { sel: sel, color: color, bg: bg || '' };
+    lastKey = ruleKey(pending);
+    update();
+  }
+
+  /** Stable identity for a rule: a tone rule is "text colour X", not a selector. */
+  function ruleKey(r) {
+    if (!r) return '';
+    return r.match === 'color' ? 'tone:' + r.from : (r.sel || '');
   }
 
   function rgbToHex(str) {
@@ -490,6 +599,160 @@
     return el && invertDepth(el) % 2 === 1 ? complementCss(str) : str;
   }
 
+  /* ═══════════════════ matching by COLOUR instead of by class ═════════════
+
+     Measured on quantamagazine (2026-11-11): the article's paragraphs are bare
+     <p> elements with NO class at all, so the picker only offered "this element
+     only" and a hand-typed selector — one of 186 text elements could be
+     recoloured, and 185 stayed white. Nothing selector-shaped could fix that:
+     the page expresses body text as ~140 elements spread over span/p/h2/a/em/
+     strong/h3 with one thing in common, which is the colour they render.
+
+     So a second rule kind exists — a TONE rule, no selector:
+
+         {id:'r3', match:'color', from:'#e5e5e5', color:'#00ffff', bg:''}
+
+     `from` is the colour the EYE sees (rendered space, same convention as
+     `color`). sweepTone() walks the text-owning elements, compares each
+     element's baseline rendered colour, and tags matches with
+
+         data-dm-tone="r3o"   (odd invert depth -> cssText writes complement)
+         data-dm-tone="r3e"   (even depth, i.e. inside a restored photo)
+
+     Tagging, not inline styles: the attribute is undone by removing it, it
+     survives a rule colour change, and it costs one stylesheet rule for every
+     element that matches. */
+  function uid() { return 'r' + (++seq) + Math.floor(Math.random() * 1296).toString(36); }
+
+  function sameHex(a, b) {
+    const x = parseRGB(a), y = parseRGB(b);
+    if (!x || !y) return false;
+    if (x[3] < 0.999 || y[3] < 0.999) return false;   // translucent: not comparable
+    return x[0] === y[0] && x[1] === y[1] && x[2] === y[2];
+  }
+
+  /** Rendered (eye) colour of an element as #rrggbb, or '' if not measurable. */
+  function rendersOf(el) {
+    if (!el || el.nodeType !== 1) return '';
+    if (toneBase.has(el)) return toneBase.get(el);      // pre-tone baseline
+    let cs;
+    try { cs = getComputedStyle(el); } catch (e) { return ''; }
+    /* The visible ink is `-webkit-text-fill-color` when the site sets it — 26
+       elements on the Quanta article paint #1a1a1a that way, and writing only
+       `color` left them unchanged. A TRANSPARENT fill is a background-clip
+       gradient (text over a painterly background); repainting those would
+       destroy the effect, so they are not measurable and are skipped. */
+    const ink = cs.webkitTextFillColor || cs.color;
+    const rgb = parseRGB(ink);
+    if (!rgb || rgb[3] < 0.999) return '';
+    const shown = invertDepth(el) % 2 === 1 ? [255 - rgb[0], 255 - rgb[1], 255 - rgb[2]] : rgb;
+    const h = (n) => n.toString(16).padStart(2, '0');
+    return '#' + h(shown[0]) + h(shown[1]) + h(shown[2]);
+  }
+
+  function ownsText(el) {
+    for (let n = el.firstChild; n; n = n.nextSibling) {
+      if (n.nodeType === 3 && n.nodeValue && n.nodeValue.trim()) return true;
+    }
+    return false;
+  }
+
+  function toneRules() {
+    return globalRules.concat(perHost).concat(pending ? [pending] : [])
+      .filter((r) => r && r.match === 'color' && r.from && r.id);
+  }
+
+  function clearStaleTones(live) {
+    const marked = document.querySelectorAll('[' + TONE_ATTR + ']');
+    for (let i = 0; i < marked.length; i++) {
+      const v = marked[i].getAttribute(TONE_ATTR) || '';
+      if (!live.has(v.slice(0, -1))) marked[i].removeAttribute(TONE_ATTR);
+    }
+  }
+
+  /** Tag every text-owning element under `scope` whose baseline colour matches. */
+  function sweepTone(scope) {
+    const rules = toneRules();
+    if (!rules.length) {
+      if (!scope) clearStaleTones(new Set());
+      return 0;
+    }
+    const live = new Set(rules.map((r) => r.id));
+    if (!scope) clearStaleTones(live);
+
+    const start = scope || document.body || document.documentElement;
+    if (!start || start.nodeType !== 1) return 0;
+    const all = [start].concat(Array.prototype.slice.call(start.querySelectorAll('*'), 0, 8000));
+    let tagged = 0;
+    for (let i = 0; i < all.length; i++) {
+      const el = all[i];
+      if (el.id === ROOT_ID || !ownsText(el)) continue;
+      const base = rendersOf(el);
+      if (!base) continue;
+      if (!toneBase.has(el) && !el.hasAttribute(TONE_ATTR)) toneBase.set(el, base);
+      const hit = rules.filter((r) => sameHex(r.from, base))[0];
+      const want = hit ? hit.id + (invertDepth(el) % 2 === 1 ? 'o' : 'e') : '';
+      const has = el.getAttribute(TONE_ATTR);
+      if (want) {
+        if (has !== want) el.setAttribute(TONE_ATTR, want);
+        tagged++;
+      } else if (has) {
+        el.removeAttribute(TONE_ATTR);
+      }
+    }
+    return tagged;
+  }
+
+  /* Pages fill in after document_start and single-page sites swap whole
+     sections. Watch for NEW nodes only (not attributes — we write one, which
+     would loop) and re-tag after the burst settles. */
+  function ensureObserve() {
+    if (mo || !window.MutationObserver || !document.documentElement) return;
+    mo = new MutationObserver((recs) => {
+      if (!toneRules().length) return;
+      clearTimeout(moTimer);
+      moTimer = setTimeout(() => {
+        for (let i = 0; i < recs.length; i++) {
+          const added = recs[i].addedNodes;
+          for (let j = 0; j < added.length; j++) {
+            if (added[j].nodeType === 1 && added[j].id !== ROOT_ID) sweepTone(added[j]);
+          }
+        }
+      }, 250);
+    });
+    mo.observe(document.documentElement, { childList: true, subtree: true });
+  }
+
+  /** Rendered colour -> how many text elements show it (the "dominant" one wins). */
+  function colourGroups() {
+    const map = new Map();
+    const body = document.body;
+    if (!body) return map;
+    const all = Array.prototype.slice.call(body.querySelectorAll('*'), 0, 8000);
+    for (let i = 0; i < all.length; i++) {
+      const el = all[i];
+      if (!ownsText(el)) continue;
+      const c = rendersOf(el);
+      if (!c) continue;
+      const g = map.get(c) || { n: 0, chars: 0, tags: {} };
+      g.n++;
+      g.chars += (el.textContent || '').trim().length;
+      const t = el.tagName.toLowerCase();
+      g.tags[t] = (g.tags[t] || 0) + 1;
+      map.set(c, g);
+    }
+    return map;
+  }
+
+  function sortedGroups() {
+    return [...lastGroups.entries()].sort((a, b) => (b[1].n - a[1].n));
+  }
+
+  function dominantColour() {
+    const s = sortedGroups();
+    return s.length ? s[0][0] : '';
+  }
+
   /* Our own UI is a child of <html>, so the page filter paints IT too — the
      panel came up as a light-grey box with salmon buttons and a mirrored
      swatch. One invert on the panel and on the hover outline cancels it, which
@@ -505,15 +768,17 @@
   /* ─────────────────────────────── live preview + contrast ───────────── */
   function update() {
     if (!pending) return;
-    scopeSel.title = pending.sel || '';
+    scopeSel.title = pending.sel || ('text colour ' + pending.from);
     applyRules();
-    if (!lastPick || !pending.sel) { contrastEl.textContent = ''; return; }
+    if (!lastPick) { contrastEl.textContent = ''; return; }
 
     let target = lastPick;
-    try {
-      const found = document.querySelector(pending.sel);
-      if (found) target = found;
-    } catch (e) { /* invalid selector while typing */ }
+    if (pending.sel) {
+      try {
+        const found = document.querySelector(pending.sel);
+        if (found) target = found;
+      } catch (e) { /* invalid selector while typing */ }
+    }
 
     // Measure in RENDERED space: pending.color is intent, and on an inverted
     // page the backdrop the eye sees is the complement of the one
@@ -537,26 +802,33 @@
 
   /* ────────────────────────────────── save / forget / export ─────────── */
   async function onSave() {
-    if (!pending || !pending.sel) return;
-    const rule = { sel: pending.sel, color: pending.color, bg: pending.bg || '' };
-    const i = perHost.findIndex((r) => r.sel === rule.sel);
+    if (ready) await ready;          // storage read must precede the push, or
+    if (!pending || !ruleKey(pending)) return;   // loadRules clobbers perHost
+    const rule = pending.match === 'color'
+      ? { id: pending.id, match: 'color', from: pending.from, color: pending.color, bg: pending.bg || '' }
+      : { sel: pending.sel, color: pending.color, bg: pending.bg || '' };
+    const k = ruleKey(rule);
+    const i = perHost.findIndex((r) => ruleKey(r) === k);
     if (i >= 0) perHost[i] = rule; else perHost.push(rule);
     await persist();
     pending = null;
     applyRules();
     renderRules();
-    infoEl.textContent = 'Saved for ' + host + ': ' + rule.sel;
+    infoEl.textContent = 'Saved for ' + host + ': ' + (rule.match === 'color' ? 'all text ' + rule.from : rule.sel);
   }
 
   async function onForget() {
-    const sel = (pending && pending.sel) || (scopeSel && scopeSel.value);
+    if (ready) await ready;
+    const sel = ruleKey(pending) || lastKey;
     const before = perHost.length;
-    perHost = perHost.filter((r) => r.sel !== sel);
+    perHost = perHost.filter((r) => ruleKey(r) !== sel);
     if (perHost.length !== before) { await persist(); }
     pending = null;
     applyRules();
     renderRules();
-    infoEl.textContent = perHost.length === before ? 'No saved rule for ' + sel : 'Removed ' + sel;
+    infoEl.textContent = perHost.length === before
+      ? 'No saved rule for ' + sel
+      : 'Removed ' + sel.replace(/^tone:/, 'all text ');
   }
 
   function onExport() {
@@ -578,8 +850,11 @@
     }));
     globalRules.concat(perHost).slice(0, 12).forEach((r) => {
       const sw = mk('span', { cls: 'sw', style: 'background:' + (r.color || '#888') });
+      const label = r.match === 'color'
+        ? '≈ all text ' + r.from + ' (' + document.querySelectorAll('[' + TONE_ATTR + ']').length + ' tagged)'
+        : r.sel;
       listEl.appendChild(mk('div', { cls: 'rule' }, [
-        mk('span', { cls: 'dim' }, [sw, mk('span', { text: r.sel })]),
+        mk('span', { cls: 'dim' }, [sw, mk('span', { text: label })]),
         mk('span', { cls: 'dim', text: (r.bg ? r.bg + ' bg' : 'text only') })
       ]));
     });
@@ -597,14 +872,31 @@
   } catch (e) { /* no runtime in a bare page harness */ }
 
   // Apply anything already saved for this host, without drawing anything.
-  loadRules().then(applyRules).catch(() => {});
+  // `ready` is what onSave/onForget await: pushing a rule before this resolves
+  // gets the array replaced underneath them by loadRules().
+  ready = loadRules().then(applyRules).catch(() => {});
 
   // Harness hook: lets a test drive the picker without a real click.
   window.__dmTuner = {
     open: openPanel,
     close: closePanel,
     capture: (el) => { ensureRoot(); capture(el); },
-    state: () => ({ host: host, perHost: perHost, global: globalRules, pending: pending, css: styleEl ? styleEl.textContent : '' }),
-    save: onSave
+    state: () => ({
+      host: host, perHost: perHost, global: globalRules, pending: pending,
+      css: styleEl ? styleEl.textContent : '',
+      tagged: document.querySelectorAll('[' + TONE_ATTR + ']').length
+    }),
+    /* colour-sweep surface: the same code paths the panel buttons hit */
+    scope: (v) => { scopeSel.value = v; onScopeChange(); },
+    tone: (from, colour) => {
+      applyTone(from);
+      if (colour) { txtInput.value = colour; pending.color = colour; update(); }
+    },
+    groups: () => [...lastGroups.entries()]
+      .sort((a, b) => b[1].n - a[1].n)
+      .map(([c, v]) => ({ colour: c, n: v.n, chars: v.chars, tags: v.tags })),
+    sweep: () => sweepTone(),
+    save: onSave,
+    forget: onForget
   };
 })();
