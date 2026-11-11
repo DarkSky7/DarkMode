@@ -1,5 +1,66 @@
 # DarkMode — TODO / workstream tracker
 
+## 2026-11-11 — 1.0.16: the tuner speaks RENDERED colour
+
+Reported by Mike on quantamagazine.org: picked a red, got a **cyan swatch**, and
+the heading text stayed white.
+
+### Done
+- [x] **Root cause of the mirror.** `content.css` puts `filter: invert(1)` on
+      `html.cr-dark`. Two consequences, one cause: (a) every colour a rule wrote
+      was inverted on the way out, so cyan intent rendered red; (b) the tuner
+      panel is a child of `<html>`, so the page filter painted the panel as
+      well — that is why the swatch showed the complement.
+- [x] **Rules store intent, write the complement.** `invertDepth(el)` counts
+      `invert(1)` in computed filters up the ancestor chain (media and
+      `[data-cr-bgphoto]` subtrees carry a second invert and stay at net zero);
+      `cssText()` complements per selector, so a restored photo is left alone.
+      Intent — not the written value — is what is saved and exported.
+- [x] **Panel + hover outline counter-inverted** (`syncUiFilter()`), so the UI
+      is true colour and the swatch shows what will actually appear. A new line
+      reports the transaction: `page inverted · writes #00ffff to render #ff0000`.
+- [x] **Capture seeds the rendered colour**, not the computed one: a `#003366`
+      paragraph on an inverted page now seeds `#ffcc99` — what the eye sees.
+- [x] **Contrast measured in rendered space** (backdrop complemented when the
+      element is under an odd invert) so the printed rgb() matches the screen.
+      The ratio itself is invert-invariant, so the warning thresholds are
+      unchanged.
+- [x] **"This element only" no longer means "every <strong> on the page".**
+      Classless, id-less elements fell back to their tag name; on the Quanta
+      article `strong` matched 3 and the same fallback would hit dozens.
+      `uniqueSelectorFor()` now climbs, testing after every step, taking the
+      first path that matches exactly one element, with each ancestor
+      contributing its first class (Quanta ships the article twice, mobile +
+      desktop, so a purely positional path is not unique). Result on that page:
+      `div.post__content > section.outer > div.flex-auto >
+      div.post__content__section > div.post__content > h2:nth-of-type(1) >
+      strong` → matches 1.
+- [x] **Verified — `scripts/test-inversion.py`** (kept in the repo). Real Chrome,
+      two mock pages (inverted / plain), 17 assertions + a pixel check:
+      intent `#00ffff` → writes `#ff0000` → probe block renders
+      `rgb(0, 255, 255)` sampled out of a headless screenshot. Plain page writes
+      intent unchanged; even-depth subtree not complemented; panel
+      counter-inverted only when the page is. Both the working tree and
+      `--target dist/DarkMode-1.0.16` pass, 0 failures.
+- [x] `addons-linter` on `dist/DarkMode-1.0.16.xpi`: 0 errors / 0 warnings /
+      0 notices.
+
+### Open
+- [ ] **Brave trial on a real site** (unpacked copy already 1.0.16:
+      brave://extensions → DarkMode → Reload). Zen is still on signed 1.0.15.
+- [ ] **Upload 1.0.16 to AMO** once the trial passes — notes ready in
+      `amo-release-notes-1.0.16.md`. Upload `dist/DarkMode-1.0.16.xpi`.
+- [ ] Not reproduced from Mike's report: text "stays white". The container case
+      was tested and a rule on `.wysiwyg` DOES reach the heading
+      (`rgb(26,26,26)` → `rgb(0,255,255)` computed), so if a colour still fails
+      to land, capture the panel's info line (which element it picked) and the
+      mirror line.
+- [ ] Tune a real resistant site (Gmail is DENY-listed by design) and export the
+      rules — that export is the starting point for a real palette instead of
+      per-element choices.
+- [ ] Global theme: flip `tuneRulesGlobal` on by promoting a host's rules; the
+      application path already concatenates global + per-host.
+
 ## 2026-11-11 — 1.0.15: "tune in place" (point at an element, tune the class)
 
 ### Done

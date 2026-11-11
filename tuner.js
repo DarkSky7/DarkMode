@@ -26,7 +26,7 @@
   let root = null, shadow = null, styleEl = null, panel = null;
   let picking = false, pending = null, infoEl = null, contrastEl = null, scopeSel = null, customInput = null;
   let txtInput = null, bgInput = null, bgChk = null, listEl = null, exportEl = null;
-  let hi = null, perHost = [], globalRules = [], lastPick = null;
+  let hi = null, perHost = [], globalRules = [], lastPick = null, mirrorEl = null;
 
   /* ───────────────────────────── storage (callback or promise) ───────── */
   function sget(keys) {
@@ -69,13 +69,19 @@
   }
 
   /* ───────────────────────────────────── applying rules ──────────────── */
+  /* Rules store the colour the EYE should see (intent). The page itself is
+     colour-wheel inverted, so what has to be WRITTEN is the complement —
+     see invertDepth() below. */
   function cssText(rules) {
     return rules
       .filter((r) => r && r.sel)
       .map((r) => {
+        const odd = invertDepthFor(r.sel) % 2 === 1;
+        const color = r.color ? (odd ? complementCss(r.color) : r.color) : '';
+        const bg = r.bg ? (odd ? complementCss(r.bg) : r.bg) : '';
         const parts = [];
-        if (r.color) parts.push('color:' + r.color + ' !important');
-        if (r.bg) parts.push('background-color:' + r.bg + ' !important');
+        if (color) parts.push('color:' + color + ' !important');
+        if (bg) parts.push('background-color:' + bg + ' !important');
         return parts.length ? r.sel + '{' + parts.join(';') + '}' : '';
       })
       .filter(Boolean)
@@ -196,6 +202,7 @@
 
     infoEl = mk('div', { cls: 'dim', text: 'No element selected.', id: 'info' });
     contrastEl = mk('div', { cls: 'dim', text: '', id: 'contrast' });
+    mirrorEl = mk('div', { cls: 'dim', text: '', id: 'mirror' });
 
     scopeSel = mk('select', { id: 'scope' });
     scopeSel.addEventListener('change', onScopeChange);
@@ -243,12 +250,14 @@
     ]));
     panel.appendChild(mk('div', { cls: 'row' }, [mk('span', { cls: 'lab', text: 'bg' }), bgInput]));
     panel.appendChild(contrastEl);
+    panel.appendChild(mirrorEl);
     panel.appendChild(mk('div', { cls: 'box' }, [saveBtn, forgetBtn, exportBtn]));
     panel.appendChild(exportEl);
     panel.appendChild(listEl);
 
     shadow.appendChild(panel);
     document.documentElement.appendChild(root);
+    syncUiFilter();
     renderRules();
   }
 
@@ -261,6 +270,7 @@
   function openPanel() {
     ensureRoot();
     root.style.display = '';
+    syncUiFilter();
     renderRules();
   }
 
@@ -281,6 +291,7 @@
         'all:initial;position:fixed;pointer-events:none;z-index:2147483647;' +
         'border:2px solid #00ffff;background:rgba(0,255,255,.07);border-radius:2px;');
       document.documentElement.appendChild(hi);
+      syncUiFilter();
     }
     document.addEventListener('mousemove', onMove, true);
     document.addEventListener('click', onClick, true);
@@ -355,8 +366,8 @@
     // default scope: the class with the largest count that is still specific
     const best = classes.filter((x) => x.n > 1 && x.n <= 200).pop() || classes[0];
     pending = {
-      sel: best ? '.' + best.c : (el.id ? '#' + el.id : tag),
-      color: rgbToHex(cs.color),
+      sel: best ? '.' + best.c : uniqueSelectorFor(el),
+      color: renderedAs(rgbToHex(cs.color), el),
       bg: ''
     };
     scopeSel.value = best ? '.' + best.c : '__this';
@@ -373,7 +384,7 @@
     customInput.hidden = v !== '__custom';
     if (v === '__this') {
       const el = lastPick;
-      setPending(el ? (el.id ? '#' + el.id : el.tagName.toLowerCase()) : '');
+      setPending(el ? uniqueSelectorFor(el) : '');
     } else if (v === '__custom') {
       setPending(customInput.value.trim());
     } else {
@@ -394,6 +405,103 @@
     return '#' + h(c[0]) + h(c[1]) + h(c[2]);
   }
 
+  /* "This element only" must actually mean ONE element. A classless, id-less
+     element used to fall back to its tag name, so scoping a single heading
+     quietly restyled every <strong> in the article (measured on quantamagazine:
+     `strong` matched 3, and the same fallback runs to dozens on long pages).
+     Build a path upward, testing after every step, and stop at the first one
+     that matches exactly one element. Ancestors contribute their first class
+     too — Quanta ships the same article twice (mobile + desktop), so a purely
+     positional path stops being unique at the wrapper that differs. */
+  function stepFor(node) {
+    const tag = node.tagName.toLowerCase();
+    let cls = '';
+    if (node.classList && node.classList.length) {
+      const own = [...node.classList].filter((c) => !/^(cr-|dm-)/.test(c));
+      if (own.length) cls = '.' + CSS.escape(own[0]);
+    }
+    const parent = node.parentElement;
+    if (!parent) return tag + cls;
+    const same = [...parent.children].filter((c) => c.tagName === node.tagName);
+    const nth = same.length > 1 ? ':nth-of-type(' + (same.indexOf(node) + 1) + ')' : '';
+    return tag + cls + nth;
+  }
+
+  function uniqueSelectorFor(el) {
+    if (!el || el.nodeType !== 1) return '';
+    if (el.id) return '#' + CSS.escape(el.id);
+    const parts = [];
+    let node = el;
+    while (node && node.nodeType === 1 && node !== document.documentElement) {
+      if (node.id) { parts.unshift('#' + CSS.escape(node.id)); break; }
+      parts.unshift(stepFor(node));
+      const sel = parts.join(' > ');
+      try {
+        if (document.querySelectorAll(sel).length === 1) return sel;
+      } catch (e) { /* keep climbing */ }
+      if (parts.length >= 12) break;
+      node = node.parentElement;
+    }
+    return parts.join(' > ');
+  }
+
+  /* ─────────── colour-wheel inversion: intent vs what gets written ──────
+     content.css puts `filter: invert(1)` on html.cr-dark, and re-inverts media
+     (img/video/canvas/…) and restored background-photo elements so they keep
+     their true colours — those subtrees therefore carry TWO inverts (net
+     identity), not one.
+
+     The colour that RENDERS is the complement of the colour written, per odd
+     invert above the element. So picking cyan wrote #00ffff and the page showed
+     #ff0000 — "the picker is colour-wheel mirrored". Fixed by storing intent
+     and complementing on the way into the stylesheet, measured per selector so
+     a restored photo subtree is left alone. */
+  function invertDepth(el) {
+    let n = 0;
+    let node = el;
+    while (node && node.nodeType === 1) {
+      const f = getComputedStyle(node).filter;
+      if (f && f !== 'none' && /invert\(\s*(?:1|100%)\s*\)/.test(f)) n++;
+      node = node.parentElement;
+    }
+    return n;
+  }
+
+  // Selector not painted yet (typing, dynamic) -> assume the page-level count.
+  function invertDepthFor(sel) {
+    let el = null;
+    try { el = sel ? document.querySelector(sel) : null; } catch (e) { el = null; }
+    return invertDepth(el || document.documentElement);
+  }
+
+  function complementCss(str) {
+    const c = parseRGB(str);
+    if (!c) return str;
+    const r = 255 - c[0], g = 255 - c[1], b = 255 - c[2];
+    if (/^#[0-9a-f]{3}$/i.test(str) || /^#[0-9a-f]{6}$/i.test(str)) {
+      const h = (n) => n.toString(16).padStart(2, '0');
+      return '#' + h(r) + h(g) + h(b);
+    }
+    return 'rgba(' + r + ',' + g + ',' + b + ',' + c[3] + ')';
+  }
+
+  // The colour an element actually shows to the viewer.
+  function renderedAs(str, el) {
+    return el && invertDepth(el) % 2 === 1 ? complementCss(str) : str;
+  }
+
+  /* Our own UI is a child of <html>, so the page filter paints IT too — the
+     panel came up as a light-grey box with salmon buttons and a mirrored
+     swatch. One invert on the panel and on the hover outline cancels it, which
+     is also what makes the swatch show the colour that will be produced. */
+  function syncUiFilter() {
+    const odd = invertDepth(document.documentElement) % 2 === 1;
+    const f = odd ? 'invert(1)' : 'none';
+    if (root) root.style.filter = f;
+    if (hi) hi.style.filter = f;
+    return odd;
+  }
+
   /* ─────────────────────────────── live preview + contrast ───────────── */
   function update() {
     if (!pending) return;
@@ -407,12 +515,24 @@
       if (found) target = found;
     } catch (e) { /* invalid selector while typing */ }
 
-    const backdrop = backdropOf(target);
+    // Measure in RENDERED space: pending.color is intent, and on an inverted
+    // page the backdrop the eye sees is the complement of the one
+    // getComputedStyle reports. A uniform invert preserves the ratio itself, so
+    // this changes only the printed numbers — but they now match the screen.
+    const odd = invertDepth(target) % 2 === 1;
+    const raw = backdropOf(target);
+    const backdrop = odd ? [255 - raw[0], 255 - raw[1], 255 - raw[2], raw[3]] : raw;
     const fg = parseRGB(pending.color) || parseRGB(getComputedStyle(target).color) || [255, 255, 255, 1];
     const r = ratio(fg, backdrop);
     const txt = 'contrast ' + r.toFixed(1) + ':1 vs backdrop rgb(' + backdrop[0] + ',' + backdrop[1] + ',' + backdrop[2] + ')';
     contrastEl.textContent = r < 3 ? txt + ' — too low' : r < 4.5 ? txt + ' — OK for large text' : txt + ' — good';
     contrastEl.className = r < 3 ? 'warn' : r < 4.5 ? 'dim' : 'ok';
+    if (mirrorEl) {
+      mirrorEl.textContent = (odd && pending.color)
+        ? 'page inverted · writes ' + complementCss(pending.color).toLowerCase() +
+          ' to render ' + String(pending.color).toLowerCase()
+        : '';
+    }
   }
 
   /* ────────────────────────────────── save / forget / export ─────────── */
