@@ -71,6 +71,31 @@ def write_zip(path: Path, manifest_override: bytes | None = None):
             z.writestr(info, data)
 
 
+def check_injection_parity() -> list[str]:
+    """popup.js re-injects content scripts into tabs that predate the extension.
+
+    That list has to stay in step with the manifest's `content_scripts`, or a
+    feature silently dies only on those tabs. It did: the fallback injected
+    content.js but not tuner.js, so "Darken this page" worked and "Tune in
+    place" reported "could not load on this page" forever.
+    """
+    import re
+    manifest = json.loads((ROOT / "manifest.json").read_text())
+    declared = [f for cs in manifest.get("content_scripts", []) for f in cs.get("js", [])]
+    declared_css = [f for cs in manifest.get("content_scripts", []) for f in cs.get("css", [])]
+    popup = (ROOT / "popup.js").read_text(encoding="utf-8")
+    # every filename the popup mentions at all (executeScript/insertCSS args)
+    mentioned = set(re.findall(r"['\"]([\w./-]+\.(?:js|css))['\"]", popup))
+    problems = []
+    for f in declared:
+        if f not in mentioned:
+            problems.append("popup.js ensureContent() never injects %s (declared in manifest content_scripts)" % f)
+    for f in declared_css:
+        if f not in mentioned:
+            problems.append("popup.js ensureContent() never inserts %s" % f)
+    return problems
+
+
 def main() -> int:
     ver = sys.argv[1] if len(sys.argv) > 1 else json.loads((ROOT / "manifest.json").read_text())["version"]
     global stage
@@ -107,6 +132,14 @@ def main() -> int:
         print(f"{p.name}: MD5 {hashlib.md5(p.read_bytes()).hexdigest()}  ({p.stat().st_size} bytes)")
 
     sync_installed(ver)
+
+    drift = check_injection_parity()
+    if drift:
+        print("\nPARITY PROBLEMS (on-demand injection drifted from the manifest):")
+        for d in drift:
+            print("  FAIL " + d)
+        return 1
+    print("injection parity: popup.js covers every declared content script")
     return 0
 
 

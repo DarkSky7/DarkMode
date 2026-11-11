@@ -45,6 +45,21 @@ the heading text stayed white.
 - [x] `addons-linter` on `dist/DarkMode-1.0.16.xpi`: 0 errors / 0 warnings /
       0 notices.
 
+### Fixed after the Brave report (same version, not yet published)
+- [x] **"The tuner could not load on this page" in Brave.** Reloading the
+      extension strips content scripts from every open tab; `ensureContent()`
+      re-injected `content.js` but NOT `tuner.js`, so the tuner's message
+      listener never existed and its button stayed dead while "Darken this
+      page" worked. It now injects every script the manifest declares
+      (`tuner.js` is idempotent via `window.__dmTunerLoaded`).
+- [x] **Popup race.** Clicking Tune before `refresh()` resolved left `tab` null
+      and threw inside `askTab` with no visible error; `askTab` now resolves the
+      tab itself and returns null cleanly if there is none.
+- [x] **Guard so it cannot drift again:** `scripts/package.py` now runs
+      `check_injection_parity()` and fails the build if popup.js stops
+      mentioning a script the manifest declares. Verified red (removing the
+      tuner line → exactly one FAIL naming tuner.js) then green.
+
 ### Open
 - [ ] **Brave trial on a real site** (unpacked copy already 1.0.16:
       brave://extensions → DarkMode → Reload). Zen is still on signed 1.0.15.

@@ -19,17 +19,29 @@ async function sendTab(tab, msg) {
 }
 
 /* MV3 does not inject content scripts into tabs that were open BEFORE the
-   extension loaded. Fallback: inject on demand (activeTab covers this tab
-   because the user just clicked the icon), then retry the message. */
+   extension loaded — and reloading the extension in the browser's extensions
+   page strips them from every open tab, which is what "reload the tab and try
+   again" was telling the user to do.
+
+   The fallback used to inject content.js only, so on those tabs "Darken this
+   page" worked while "Tune in place" stayed dead forever: the tuner lives in a
+   SEPARATE content-script file (tuner.js) whose message listener never existed.
+   Inject every script the manifest declares, not just the first one. tuner.js
+   is idempotent (window.__dmTunerLoaded), so injecting it twice is harmless. */
 async function ensureContent(tab) {
   try {
     await chrome.scripting.insertCSS({ target: { tabId: tab.id }, files: ['content.css'] });
     await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] });
+    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['tuner.js'] });
     return true;
   } catch (e) { return false; }
 }
 
 async function askTab(tab, msg) {
+  // The popup can be clicked before refresh() has resolved, in which case `tab`
+  // is still null and the old code threw here with no visible error at all.
+  if (!tab) tab = await currentTab();
+  if (!tab || !tab.id) return null;
   let res = await sendTab(tab, msg);
   if (res === null && /^https?:/.test(tab.url || '')) {
     if (await ensureContent(tab)) res = await sendTab(tab, msg); // retry once
