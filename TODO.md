@@ -1,5 +1,49 @@
 # DarkMode — TODO / workstream tracker
 
+## 2026-11-11 — 1.0.15: "tune in place" (point at an element, tune the class)
+
+### Done
+- [x] **`tuner.js`** — on-page panel in a shadow root (site CSS cannot touch it,
+      no `innerHTML` anywhere: Trusted Types sites reject it).
+- [x] **Picker** — hover outline via `elementFromPoint` + bounding rect (never
+      computed style: a `display:none` ancestor leaves a descendant reporting
+      `display:block`), Esc cancels, clicking the panel never captures itself.
+- [x] **"The whole class" scope** — every class the element carries is listed
+      with its live element count, sorted by count, so scope is chosen by
+      observed blast radius instead of selector syntax. Plus "this element only"
+      and a free-text selector.
+- [x] **Live tuning** — text colour and background colour, applied through one
+      `<style>` with `!important`, re-rendered on every change.
+- [x] **Contrast readout against the measured backdrop** — walks ancestors for
+      the first opaque background, prints the ratio and flags it:
+      dark card `13.7:1 — good`; the same cyan on a light surface
+      `1.2:1 — too low` in red. This is the cyan-on-white trap, shown at the
+      moment of choosing rather than discovered later.
+- [x] **Persistence** — rules as `{sel, color, bg}` under
+      `tuneRulesByHost[host]`, with a `tuneRulesGlobal` list applied on every
+      host and per-host rules layered last. A global theme is therefore the same
+      rule list at wider scope, not a second mechanism. `Copy JSON` exports the
+      merged set so proven rules can be baked into `content.css` defaults.
+- [x] Popup button `🎯 Tune in place…` (popup closes, panel stays on the page).
+- [x] `scripts/package.py` FILES list now includes `tuner.js` — caught by
+      verifying the built archive, not by reading the script.
+- [x] Verified in **Chrome and Zen** against a mock page: capture → `.hP → 4
+      elements`, `#00ffff` applied to all four (`rgb(0,255,255)` computed), rule
+      saved to `tuneRulesByHost`, contrast warnings both ways.
+- [x] Built `dist/DarkMode-1.0.15.{zip,xpi}` (16 files, `tuner.js` inside both,
+      manifest `content_js = [content.js, tuner.js]`), unpacked copies synced.
+
+### Open
+- [ ] **Zen/Firefox install needs an AMO key for `darkmode@landis.cc`.**
+      `~/.ssh/amo-transcript-first-guard.env` is the *transcript* add-on's key and
+      must not be reused. Until a `~/.ssh/amo-darkmode.env` exists, 1.0.15 is
+      Chromium-only (Brave: brave://extensions → Reload).
+- [ ] Tune a real resistant site (Gmail is DENY-listed by design) and export the
+      rules — that export is the starting point for a real palette instead of
+      per-element choices.
+- [ ] Global theme: flip `tuneRulesGlobal` on by promoting a host's rules; the
+      application path already concatenates global + per-host.
+
 ## 2026-11-05 — 1.0.11–1.0.13: Gmail repair step actually works now
 
 ### Done

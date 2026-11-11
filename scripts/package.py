@@ -27,6 +27,7 @@ FILES = [
     "manifest.json",
     "background.js",
     "content.js",
+    "tuner.js",
     "content.css",
     "popup.html",
     "popup.css",

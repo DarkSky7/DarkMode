@@ -1,7 +1,7 @@
 /* DarkMode popup — ask once, remember optionally. */
 'use strict';
 
-const VERSION = '1.0.14';
+const VERSION = '1.0.15';
 document.getElementById('ver').textContent = 'v' + VERSION;
 
 async function currentTab() {
@@ -110,3 +110,20 @@ remChk.addEventListener('change', async () => {
 });
 
 refresh();
+
+/* ── Tune in place ────────────────────────────────────────────────────────
+   The panel lives on the page (tuner.js, shadow DOM), not in the popup, so it
+   can be pointed at while the page stays visible. Clicking this closes the
+   popup and leaves the panel up. */
+const tuneBtn = document.getElementById('btn-tune');
+const tuneNote = document.getElementById('tune-note');
+if (tuneBtn) {
+  tuneBtn.addEventListener('click', async () => {
+    const res = await askTab(tab, { type: 'dmTuner' });
+    if (res && res.ok) { window.close(); return; }
+    tuneNote.hidden = false;
+    tuneNote.textContent = host
+      ? 'The tuner could not load on this page — reload the tab and try again.'
+      : 'No web page to tune here.';
+  });
+}

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "DarkMode — resistant-site darkener",
-  "version": "1.0.14",
+  "version": "1.0.15",
   "description": "Does nothing until asked. Click the toolbar icon on a site that resists dark mode to darken it; optionally remember the site so it auto-darkens on future visits.",
   "permissions": [
     "storage",
@@ -33,7 +33,8 @@
         "<all_urls>"
       ],
       "js": [
-        "content.js"
+        "content.js",
+        "tuner.js"
       ],
       "css": [
         "content.css"
