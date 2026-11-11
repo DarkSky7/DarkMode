@@ -34,10 +34,29 @@
       manifest `content_js = [content.js, tuner.js]`), unpacked copies synced.
 
 ### Open
-- [ ] **Zen/Firefox install needs an AMO key for `darkmode@landis.cc`.**
-      `~/.ssh/amo-transcript-first-guard.env` is the *transcript* add-on's key and
-      must not be reused. Until a `~/.ssh/amo-darkmode.env` exists, 1.0.15 is
-      Chromium-only (Brave: brave://extensions → Reload).
+- [x] **Zen/Firefox install — done 2026-11-11 via AMO web upload, no API key.**
+      `darkmode@landis.cc` was already on AMO (id **3066327**, author DarkSky,
+      **listed**, slug **`darkmode-for-resistant-sites`**), so "upload a new
+      version" was all that was needed — the API-key blocker in the note below
+      was self-inflicted. 1.0.15 is signed and public (file 5239699, created
+      2026-11-11T17:42Z). Live payload verified against
+      `dist/DarkMode-1.0.15.xpi`: 16/16 entries identical, `META-INF/cose.sig`
+      present, `background.scripts`, `tuner.js` 19,880 bytes.
+      Installed: **Zen = 1.0.15 signed** (version + signature read back out of
+      the profile xpi). Firefox was holding 1.0.7 open (sharing violation) so it
+      could not be copied in; it updates itself from AMO.
+      **Traps, next time:**
+        * Upload `dist/DarkMode-<ver>.xpi`, **never** the `.zip` — the zip is the
+          Chromium flavor (`background.service_worker`) and AMO's linter rejects
+          it: `MANIFEST_FIELD_UNSUPPORTED`, 1 error, upload blocked.
+        * Firefox's *"appears to be corrupt"* means **unsigned**, not damaged.
+        * Developer-hub URLs are keyed by **slug**, not GUID:
+          `/developers/addon/darkmode/` → "Oops! Not allowed";
+          `/developers/addon/darkmode-for-resistant-sites/` → correct.
+        * Drift note: AMO's signed 1.0.15 was produced by an ad-hoc rebuild, not
+          by `scripts/package.py`. Payload is identical except `manifest.json`
+          escaping the em dash as `\u2014` in `name` (semantically the same
+          string). Next release should upload the repo-built `.xpi`.
 - [ ] Tune a real resistant site (Gmail is DENY-listed by design) and export the
       rules — that export is the starting point for a real palette instead of
       per-element choices.
