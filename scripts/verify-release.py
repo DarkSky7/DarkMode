@@ -61,8 +61,8 @@ def main() -> int:
         json.loads((ROOT / "manifest.json").read_text())["version"]
     print(f"verifying release {ver}")
     problems = []
-    problems += check(DIST / f"DarkMode-{ver}.zip", "chromium", ver)
-    problems += check(DIST / f"DarkMode-{ver}.xpi", "firefox", ver)
+    problems += check(DIST / f"DarkMode-{ver}-chromium.zip", "chromium", ver)
+    problems += check(DIST / f"DarkMode-{ver}-firefox.xpi", "firefox", ver)
     stage = DIST / f"DarkMode-{ver}"
     if not stage.is_dir():
         problems.append(f"{stage.name}/: staged dir MISSING (Load unpacked target)")

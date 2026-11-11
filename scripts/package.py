@@ -124,8 +124,12 @@ def main() -> int:
         shutil.copy2(stage / f, dst)
     print(f"mirrored -> {current}  (stable load-unpacked path)")
 
-    zpath = DIST / f"DarkMode-{ver}.zip"   # Chromium
-    xpath = DIST / f"DarkMode-{ver}.xpi"   # Firefox / Zen / AMO
+    # The target is IN the filename. "DarkMode-<ver>.zip" next to
+    # "DarkMode-<ver>.xpi" is a trap: they are ~16 bytes apart in size and only
+    # one of them is uploadable. Uploading the Chromium zip to AMO fails with
+    # '"background/service_worker" must be paired with "background/scripts"'.
+    zpath = DIST / f"DarkMode-{ver}-chromium.zip"   # Chromium / Brave
+    xpath = DIST / f"DarkMode-{ver}-firefox.xpi"    # Firefox / Zen / AMO
     write_zip(zpath)
     write_zip(xpath, manifest_override=firefox_manifest_bytes())
     for p in (zpath, xpath):
