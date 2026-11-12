@@ -28,7 +28,8 @@
   let picking = false, pending = null, infoEl = null, contrastEl = null, scopeSel = null, customInput = null;
   let txtInput = null, bgInput = null, bgChk = null, listEl = null, exportEl = null;
   let hi = null, perHost = [], globalRules = [], lastPick = null, mirrorEl = null, groupsEl = null;
-  let lastGroups = new Map(), lastMine = '', lastKey = '', seq = 0, mo = null, moTimer = null;
+  let coverageEl = null, coverBtn = null;
+  let lastGroups = new Map(), lastMine = '', lastKey = '', seq = 0, mo = null, moTimer = null, covTimer = null;
   let ready = null;   // resolves once storage has been read; saves await it
   let pendingRoots = [];
   /* Baseline per element, WITH the invert parity it was measured at.
@@ -69,7 +70,7 @@
     const data = await sget({ tuneRulesByHost: {}, tuneRulesGlobal: [] });
     const map = data.tuneRulesByHost || {};
     const fix = (list) => (Array.isArray(list) ? list.map((r) =>
-      (r && r.match === 'color' && !r.id) ? Object.assign({}, r, { id: uid() }) : r) : []);
+      (r && (r.match === 'color' || r.match === 'light') && !r.id) ? Object.assign({}, r, { id: uid() }) : r) : []);
     perHost = fix(map[host]);
     globalRules = fix(data.tuneRulesGlobal);
     return { perHost, globalRules };
@@ -88,9 +89,9 @@
      see invertDepth() below. */
   function cssText(rules) {
     return rules
-      .filter((r) => r && (r.sel || (r.match === 'color' && r.from && r.id)))
+      .filter((r) => r && (r.sel || ((r.match === 'color' || r.match === 'light') && r.id)))
       .map((r) => {
-        if (r.match === 'color') {
+        if (r.match === 'color' || r.match === 'light') {
           /* A tone rule has no selector at all: elements are tagged by
              sweepTone() with data-dm-tone="<ruleId><o|e>", the trailing letter
              being that element's OWN invert parity. One selector for both
@@ -114,9 +115,19 @@
                measured in Mike's profile, where a leftover 1.0.16 rule kept one
                paragraph of a 153-element group a different teal. Repeating the
                attribute costs nothing at match time and takes us to (0,8,0). */
-            const sel = ':root ' + ('[' + TONE_ATTR + '="' + r.id + suffix + '"]') +
+            const attr = '[' + TONE_ATTR + '="' + r.id + suffix + '"]' +
               ('[' + TONE_ATTR + ']').repeat(7);
-            return parts.length ? sel + '{' + parts.join(';') + '}' : '';
+            const out = [];
+            if (parts.length) out.push(':root ' + attr + '{' + parts.join(';') + '}');
+            if (r.color) {
+              /* SVG text paints with `fill` and ignores `color` outright, so a
+                 gauge's own labels would tag and stay the same colour. Scoped
+                 to `text` elements ONLY — a descendant `*` fill rule would
+                 recolour every icon inside a tagged span. */
+              out.push(':root text' + attr + '{fill:' + conv(r.color) + ' !important}');
+              out.push(':root ' + attr + ' text{fill:' + conv(r.color) + ' !important}');
+            }
+            return out.join('\n');
           };
           return [emit('o', complementCss), emit('e', (x) => x)].filter(Boolean).join('\n');
         }
@@ -290,10 +301,25 @@
     exportEl = mk('textarea', { id: 'exported', readonly: 'readonly', hidden: 'hidden' });
     listEl = mk('div', { cls: 'box', id: 'rules' });
 
+    /* Coverage + the one-click reach. "73 still light" is the sentence the
+       panel could not say before, and the button is the answer to "we need a
+       way to reach more classes": it widens the rule to a luminance threshold
+       instead of asking the user to guess which class is left over. */
+    coverageEl = mk('div', { cls: 'dim', id: 'coverage', text: '' });
+    coverBtn = mk('button', { id: 'cover', hidden: 'hidden', text: '⚡ Also cover everything light' });
+    coverBtn.addEventListener('click', () => {
+      if (!pending) return;
+      applyLight();
+      if (scopeSel.querySelector('option[value="__light"]')) scopeSel.value = '__light';
+      update();
+    });
+
     panel.appendChild(head);
     panel.appendChild(mk('div', {}, [pickBtn]));
     panel.appendChild(infoEl);
     panel.appendChild(groupsEl);
+    panel.appendChild(coverageEl);
+    panel.appendChild(mk('div', {}, [coverBtn]));
     panel.appendChild(mk('div', { cls: 'row' }, [mk('span', { cls: 'lab', text: 'apply' }), scopeSel]));
     panel.appendChild(customInput);
     panel.appendChild(mk('div', { cls: 'row' }, [
@@ -324,6 +350,7 @@
     root.style.display = '';
     syncUiFilter();
     renderRules();
+    renderCoverage();
   }
 
   function closePanel() {
@@ -434,6 +461,20 @@
               (mine === dom ? ' (dominant)' : ' (this colour)')
       }));
     }
+    /* The reach option. On Mike's dashboard "all text #cecdc9" covered the big
+       numbers but not every label, because a handful of labels render a shade
+       that rounds differently after inversion — and no list of exact colours
+       can ever be complete on a page that keeps repainting values from an API.
+       One threshold covers all of them, now and after the next render. */
+    let lightTotal = 0, lightColours = 0;
+    lastGroups.forEach((g, h) => { if (inkIsLight(h)) { lightTotal += g.n; lightColours++; } });
+    if (lightTotal >= 2) {
+      scopeSel.appendChild(mk('option', {
+        value: '__light',
+        text: '≈ everything light  → ' + lightTotal + ' elements in ' + lightColours +
+              ' colour' + (lightColours === 1 ? '' : 's') + ' (widest reach)'
+      }));
+    }
     if (dom && dom !== mine && domGroup && domGroup.n >= 2) {
       scopeSel.appendChild(mk('option', {
         value: '__tone:' + dom,
@@ -448,13 +489,16 @@
     });
     scopeSel.appendChild(mk('option', { value: '__custom', text: 'custom selector…' }));
 
-    /* Default scope. A class is preferred only when it actually reaches
-       further than a single element — a page where every paragraph carries its
-       own class makes the class list useless, and the colour group is the only
-       thing that describes "the body text". */
+    /* Default scope. A class is preferred only when it reaches essentially the
+       WHOLE colour group — it used to win at 50% of it, which is how `.fdp-val`
+       (56 elements) beat "all text #cecdc9" (129) on the ambientweather
+       dashboard: the numbers recoloured and 73 white labels did not, and there
+       was nothing on screen saying so. Markup classes are a coincidence of how
+       a site was built; the colour is what the user is pointing at. */
     const best = classes.filter((x) => x.n > 1 && x.n <= 200).pop() || classes[0];
     let defVal;
-    if (mineGroup.n >= 8 && mine === dom && (!best || best.n < mineGroup.n * 0.5)) defVal = '__tone';
+    const classCoversGroup = best && best.n >= mineGroup.n * 0.9;
+    if (mineGroup.n >= 5 && !classCoversGroup) defVal = '__tone';
     else if (best) defVal = '.' + best.c;
     else if (mineGroup.n >= 8) defVal = '__tone';
     else defVal = '__this';
@@ -478,6 +522,8 @@
     customInput.hidden = v !== '__custom';
     if (v === '__tone') {
       applyTone(lastMine);
+    } else if (v === '__light') {
+      applyLight();
     } else if (v.indexOf('__tone:') === 0) {
       applyTone(v.slice(7));
     } else if (v === '__this') {
@@ -505,6 +551,22 @@
     update();
   }
 
+  /** Threshold rule: "every text element that is light", whatever its colour. */
+  function applyLight() {
+    const color = (pending && pending.color) || txtInput.value || '#00ffff';
+    const bg = pending ? (pending.bg || '') : (bgChk.checked ? '' : bgInput.value);
+    pending = {
+      id: (pending && pending.match === 'light' && pending.id) || uid(),
+      match: 'light',
+      from: '',
+      color: color,
+      bg: bg || '',
+      min: LIGHT_MIN
+    };
+    lastKey = ruleKey(pending);
+    update();
+  }
+
   function setPending(sel) {
     const color = (pending && pending.color) || txtInput.value || '#00ffff';
     const bg = pending ? (pending.bg || '') : (bgChk.checked ? '' : bgInput.value);
@@ -516,7 +578,9 @@
   /** Stable identity for a rule: a tone rule is "text colour X", not a selector. */
   function ruleKey(r) {
     if (!r) return '';
-    return r.match === 'color' ? 'tone:' + r.from : (r.sel || '');
+    if (r.match === 'light') return 'light';
+    if (r.match === 'color') return 'tone:' + r.from;
+    return r.sel || '';
   }
 
   function rgbToHex(str) {
@@ -611,6 +675,37 @@
     return el && invertDepth(el) % 2 === 1 ? complementCss(str) : str;
   }
 
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+  function isSvgText(el) {
+    return !!el && el.namespaceURI === SVG_NS && /^text$/i.test(el.tagName);
+  }
+
+  /* "Light" is the only thing left after an exact colour stops being enough.
+     Mike, 2026-11-11, pointing at the ambientweather dashboard: *"after
+     selecting the numeric Fahrenheit temperature, and selecting a color, a
+     bunch of numeric text switched (as it should), but lots of non-numeric
+     text stayed white. We need a way to reach more classes."* Every piece of
+     text on that page that the eye reads as white really is one colour
+     (#cecdc9 = the inverted #313236), but the CONTROL he reached for was a
+     class, and a class is a coincidence of markup: `.fdp-val` covered 56 of
+     the 129 light-text elements, so the values recoloured and the labels did
+     not. A threshold rule covers the whole page no matter how many colours or
+     classes the site uses, and it keeps covering text the site adds later.
+     WCAG relative luminance, 0.45 = the point where ink stops reading as
+     "ink" and starts reading as "white" on a dark backdrop. */
+  const LIGHT_MIN = 0.45;
+  function inkIsLight(hex) {
+    const c = parseRGB(hex);
+    return !!c && lum(c) >= LIGHT_MIN;
+  }
+  function isGradientText(el) {
+    const cs = getComputedStyle(el);
+    const clip = cs.webkitBackgroundClip || cs.backgroundClip || '';
+    const fill = parseRGB(cs.webkitTextFillColor || cs.color);
+    return clip.indexOf('text') >= 0 && !!fill && fill[3] < 0.05;
+  }
+
+
   /* ═══════════════════ matching by COLOUR instead of by class ═════════════
 
      Measured on quantamagazine (2026-11-11): the article's paragraphs are bare
@@ -654,8 +749,13 @@
        elements on the Quanta article paint #1a1a1a that way, and writing only
        `color` left them unchanged. A TRANSPARENT fill is a background-clip
        gradient (text over a painterly background); repainting those would
-       destroy the effect, so they are not measurable and are skipped. */
-    const ink = cs.webkitTextFillColor || cs.color;
+       destroy the effect, so they are not measurable and are skipped.
+
+       SVG text is the exception: it paints with `fill`, so reading `color`
+       there measures an inherited HTML value that has nothing to do with the
+       pixels. Reading `fill` is what lets a gauge's dial labels into a rule. */
+    let ink = cs.webkitTextFillColor || cs.color;
+    if (isSvgText(el) && cs.fill && cs.fill !== 'none' && !/^currentcolor$/i.test(cs.fill)) ink = cs.fill;
     const rgb = parseRGB(ink);
     if (!rgb || rgb[3] < 0.999) return tagged && cached ? cached.c : '';
     /* CACHE RULES, and getting them wrong is what made a saved rule half-apply
@@ -695,7 +795,7 @@
 
   function toneRules() {
     return globalRules.concat(perHost).concat(pending ? [pending] : [])
-      .filter((r) => r && r.match === 'color' && r.from && r.id);
+      .filter((r) => r && r.id && (r.match === 'light' || (r.match === 'color' && r.from)));
   }
 
   function clearStaleTones(live) {
@@ -719,21 +819,39 @@
     const start = scope || document.body || document.documentElement;
     if (!start || start.nodeType !== 1) return 0;
     const all = [start].concat(Array.prototype.slice.call(start.querySelectorAll('*'), 0, 8000));
+
+    /* TWO PASSES — decide, then write. Tagging a parent repaints its children
+       through inheritance, so a single measure+tag loop compares the CHILDREN
+       against the colour we have just painted on the PARENT and silently skips
+       them. Measured on the ambientweather dashboard: two <sup> unit markers
+       fell out of a 102-element group for exactly this reason (the sweep walks
+       in document order, so the parent was always tagged first). */
+    const plan = [];
     let tagged = 0;
     for (let i = 0; i < all.length; i++) {
       const el = all[i];
       if (el.id === ROOT_ID || !ownsText(el)) continue;
       const base = rendersOf(el);
       if (!base) continue;
-      const hit = rules.filter((r) => sameHex(r.from, base))[0];
-      const want = hit ? hit.id + (invertDepth(el) % 2 === 1 ? 'o' : 'e') : '';
-      const has = el.getAttribute(TONE_ATTR);
-      if (want) {
-        if (has !== want) el.setAttribute(TONE_ATTR, want);
-        tagged++;
-      } else if (has) {
-        el.removeAttribute(TONE_ATTR);
+      /* Last rule wins, like the CSS cascade: rules are appended in the order
+         the user made them, so a later "everything light" has to beat an
+         earlier "all text #cecdc9" — otherwise the wider rule looks broken on
+         exactly the elements the narrow one already claimed (measured while
+         building this test: the light rule painted nothing until precedence
+         flipped). */
+      let hit = null;
+      for (let j = rules.length - 1; j >= 0; j--) {
+        const r = rules[j];
+        if (r.match === 'color' ? sameHex(r.from, base) : inkIsLight(base)) { hit = r; break; }
       }
+      if (hit) tagged++;
+      plan.push([el, hit ? hit.id + (invertDepth(el) % 2 === 1 ? 'o' : 'e') : '']);
+    }
+    for (let i = 0; i < plan.length; i++) {
+      const el = plan[i][0], want = plan[i][1];
+      const has = el.getAttribute(TONE_ATTR);
+      if (want) { if (has !== want) el.setAttribute(TONE_ATTR, want); }
+      else if (has) el.removeAttribute(TONE_ATTR);
     }
     return tagged;
   }
@@ -779,6 +897,21 @@
     }, 120);
   }
 
+  /* Is this element text the user can actually SEE? The count of a colour is
+     only meaningful over visible text: measured on the ambientweather
+     dashboard, `#f65719` "had" 167 elements and was therefore declared
+     dominant — but 155 of them were off-screen, display:none, or a 0×0
+     slide-out, and a dozen orange numbers were all that showed. Correcting
+     that is what makes "dominant" mean "the colour most of the page's text is
+     showing you". */
+  function visibleText(el) {
+    const r = el.getBoundingClientRect();
+    if (r.width < 2 || r.height < 2) return false;
+    const cs = getComputedStyle(el);
+    if (cs.display === 'none' || cs.visibility === 'hidden') return false;
+    return parseFloat(cs.opacity) > 0.05;
+  }
+
   /** Rendered colour -> how many text elements show it (the "dominant" one wins). */
   function colourGroups() {
     const map = new Map();
@@ -787,7 +920,7 @@
     const all = Array.prototype.slice.call(body.querySelectorAll('*'), 0, 8000);
     for (let i = 0; i < all.length; i++) {
       const el = all[i];
-      if (!ownsText(el)) continue;
+      if (!ownsText(el) || !visibleText(el)) continue;
       const c = rendersOf(el);
       if (!c) continue;
       const g = map.get(c) || { n: 0, chars: 0, tags: {} };
@@ -809,6 +942,56 @@
     return s.length ? s[0][0] : '';
   }
 
+  /* COVERAGE — the number the panel was missing. It used to report what one
+     scope reached and said nothing about what it left behind, which is exactly
+     how "a bunch of numeric text switched … lots of non-numeric text stayed
+     white" happened without the UI ever looking wrong. Counting is cheap
+     (one pass over visible text owners) and it turns "reach more classes" into
+     a fact the user can see: 56 of 129 covered, 73 still light. */
+  function coverage() {
+    const all = Array.prototype.slice.call(
+      document.body ? document.body.querySelectorAll('*') : [], 0, 8000);
+    let total = 0, done = 0, gradient = 0, svg = 0;
+    for (let i = 0; i < all.length; i++) {
+      const el = all[i];
+      if (!ownsText(el) || !visibleText(el)) continue;
+      const base = rendersOf(el);
+      if (!base) {
+        // Unmeasurable ink: gradient (background-clip:text) text, or a hit area
+        // over an icon image. Counted so the panel can admit to leaving it.
+        if (isGradientText(el)) gradient++;
+        continue;
+      }
+      if (!inkIsLight(base)) continue;
+      total++;
+      if (el.hasAttribute(TONE_ATTR)) { done++; if (isSvgText(el)) svg++; }
+    }
+    return { total: total, done: done, left: total - done, gradient: gradient, svg: svg };
+  }
+
+  function renderCoverage() {
+    if (!coverageEl) return;
+    /* Debounced: the colour knob fires `input` continuously and both this and
+       sweepTone() walk every text element, so recomputing per pointer move
+       would make the panel feel sticky on a heavy dashboard. */
+    if (covTimer) clearTimeout(covTimer);
+    covTimer = setTimeout(paintCoverage, 120);
+  }
+
+  function paintCoverage() {
+    covTimer = null;
+    if (!coverageEl) return;
+    const c = coverage();
+    if (!c.total && !c.gradient) { coverageEl.textContent = ''; coverageEl.className = 'dim'; if (coverBtn) coverBtn.hidden = true; return; }
+    let t = 'covers ' + c.done + ' of ' + c.total + ' light-text elements';
+    if (c.left) t += '  ·  ' + c.left + ' still light';
+    if (c.svg) t += '  ·  ' + c.svg + ' in SVG (via fill)';
+    if (c.gradient) t += '  ·  ' + c.gradient + ' gradient text left alone';
+    coverageEl.textContent = t;
+    coverageEl.className = c.left ? 'warn' : 'dim';
+    if (coverBtn) coverBtn.hidden = !c.left;
+  }
+
   /* Our own UI is a child of <html>, so the page filter paints IT too — the
      panel came up as a light-grey box with salmon buttons and a mirrored
      swatch. One invert on the panel and on the hover outline cancels it, which
@@ -824,9 +1007,10 @@
   /* ─────────────────────────────── live preview + contrast ───────────── */
   function update() {
     if (!pending) return;
-    scopeSel.title = pending.sel || ('text colour ' + pending.from);
+    scopeSel.title = pending.sel ||
+      (pending.match === 'light' ? 'every light text element' : ('text colour ' + pending.from));
     applyRules();
-    if (!lastPick) { contrastEl.textContent = ''; return; }
+    if (!lastPick) { contrastEl.textContent = ''; renderCoverage(); return; }
 
     let target = lastPick;
     if (pending.sel) {
@@ -854,6 +1038,7 @@
           ' to render ' + String(pending.color).toLowerCase()
         : '';
     }
+    renderCoverage();
   }
 
   /* ────────────────────────────────── save / forget / export ─────────── */
@@ -889,7 +1074,9 @@
   async function onSave() {
     if (ready) await ready;          // storage read must precede the push, or
     if (!pending || !ruleKey(pending)) return;   // loadRules clobbers perHost
-    const rule = pending.match === 'color'
+    const rule = pending.match === 'light'
+      ? { id: pending.id, match: 'light', from: '', color: pending.color, bg: pending.bg || '', min: LIGHT_MIN }
+      : pending.match === 'color'
       ? { id: pending.id, match: 'color', from: pending.from, color: pending.color, bg: pending.bg || '' }
       : { sel: pending.sel, color: pending.color, bg: pending.bg || '' };
     const k = ruleKey(rule);
@@ -900,9 +1087,10 @@
     pending = null;
     applyRules();                              // parity may have just changed
     renderRules();
-    infoEl.textContent = 'Saved for ' + host + ': ' +
-      (rule.match === 'color' ? 'all text ' + rule.from : rule.sel) +
+    infoEl.textContent = 'Saved for ' + host + ':  ' +
+      (rule.match === 'light' ? 'all light text' : rule.match === 'color' ? 'all text ' + rule.from : rule.sel) +
       (darkened ? '  ·  site now darkened + remembered' : '  ·  site already remembered');
+    renderCoverage();
   }
 
   async function onForget() {
@@ -917,6 +1105,7 @@
     infoEl.textContent = perHost.length === before
       ? 'No saved rule for ' + sel
       : 'Removed ' + sel.replace(/^tone:/, 'all text ');
+    renderCoverage();
   }
 
   function onExport() {
@@ -938,7 +1127,9 @@
     }));
     globalRules.concat(perHost).slice(0, 12).forEach((r) => {
       const sw = mk('span', { cls: 'sw', style: 'background:' + (r.color || '#888') });
-      const label = r.match === 'color'
+      const label = r.match === 'light'
+        ? '≈ all light text (' + document.querySelectorAll('[' + TONE_ATTR + ']').length + ' tagged)'
+        : r.match === 'color'
         ? '≈ all text ' + r.from + ' (' + document.querySelectorAll('[' + TONE_ATTR + ']').length + ' tagged)'
         : r.sel;
       listEl.appendChild(mk('div', { cls: 'rule' }, [
@@ -982,7 +1173,8 @@
     state: () => ({
       host: host, perHost: perHost, global: globalRules, pending: pending,
       css: styleEl ? styleEl.textContent : '',
-      tagged: document.querySelectorAll('[' + TONE_ATTR + ']').length
+      tagged: document.querySelectorAll('[' + TONE_ATTR + ']').length,
+      coverage: coverage()
     }),
     /* colour-sweep surface: the same code paths the panel buttons hit */
     scope: (v) => { scopeSel.value = v; onScopeChange(); },
@@ -990,6 +1182,15 @@
       applyTone(from);
       if (colour) { txtInput.value = colour; pending.color = colour; update(); }
     },
+    light: (colour) => {
+      applyLight();
+      if (colour) { txtInput.value = colour; pending.color = colour; update(); }
+    },
+    coverage: () => coverage(),
+    /* every scope the panel is offering right now, as the user sees it */
+    options: () => (scopeSel ? [...scopeSel.options].map((o) => ({
+      v: o.value, t: o.textContent.trim(), chosen: o.selected
+    })) : []),
     groups: () => [...lastGroups.entries()]
       .sort((a, b) => b[1].n - a[1].n)
       .map(([c, v]) => ({ colour: c, n: v.n, chars: v.chars, tags: v.tags })),

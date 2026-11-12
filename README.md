@@ -52,6 +52,41 @@ Known trade-offs of the filter tactic (accepted for the resistant case):
 `about:debugging#/runtime/this-firefox` → Load Temporary Add-on →
 `manifest.json`.
 
+## Tuning in place (the "Tune in place" panel)
+
+Point at any element on the inverted page and tune it without writing CSS. The
+**apply** dropdown is the whole reach story — pick the scope that covers what you
+mean, not the class you happened to click:
+
+| Scope | What it tags |
+|---|---|
+| `this element only` | a single unique path |
+| `≈ all text #xxxxxx` | every element rendering **that exact** colour |
+| `≈ everything light` | every text element whose ink reads as light (WCAG luminance ≥ 0.45) — **widest reach**, and it keeps covering text the site adds later |
+| `≈ all text <dominant>` | the colour most visible text uses |
+| `.<class>` | one CSS class, with the element count it reaches |
+
+Two things learned the hard way on `ambientweather.net` (1.0.22):
+
+- **Dominance is counted over VISIBLE text only.** It used to include
+  `display:none` and off-screen nodes, so an accent colour that 167 elements
+  "had" and a dozen showed was called dominant; the picked colour was then not
+  dominant and the default scope fell through to a single class (`.fdp-val`, 56
+  of 129 light-text elements), so the numbers recoloured and every label stayed
+  white.
+- **The panel reports coverage.** After a save it says `covers N of M light-text
+  elements · K still light`, with a `⚡ Also cover everything light` button. A
+  rule that reaches half the page is now visible as such instead of looking
+  finished.
+
+Reach mechanics, all of which cost one stylesheet rule regardless of element
+count: the sweep **measures every element before tagging any** (tagging a parent
+repaints its children through inheritance, so a one-pass loop loses them); SVG
+`<text>` is measured by `fill` and painted with `fill`; `background-clip: text`
+gradients are counted and left alone rather than silently missed; and a later
+rule outranks an earlier one where they overlap, so "everything light" actually
+wins over a narrower rule saved before it.
+
 ## Dev notes
 
 - Node for syntax checks: `/c/Users/Mike2/AppData/Local/hermes/node/node.exe`

@@ -133,6 +133,42 @@ TEST_JS = r"""
      specTagged !== null && specComputed === specWant,
      'attr=' + specTagged + ' computed=' + specComputed + ' want=' + specWant);
 
+  // ── case 3d: a child that INHERITS its ink from a tagged parent ─────────
+  // The sweep used to measure and tag in one pass, in document order, so the
+  // parent was repainted before the child was measured and the child no longer
+  // matched the colour the rule was for. Measured on the ambientweather
+  // dashboard: two <sup> unit markers fell out of a 102-element group.
+  const outer = document.querySelector('p.withsup');
+  const child = document.getElementById('child');
+  const groupColour = inverted ? '#ffcc99' : '#003366';
+  T.tone(groupColour, '#00ffff');
+  ok('an inheriting child is tagged with its parent',
+     !!outer && outer.getAttribute('data-dm-tone') !== null &&
+     !!child && child.getAttribute('data-dm-tone') !== null,
+     'parent=' + (outer && outer.getAttribute('data-dm-tone')) +
+     ' child=' + (child && child.getAttribute('data-dm-tone')));
+
+  // ── case 3e: a LATER threshold rule outranks an EARLIER exact one ───────
+  // "everything light" is the widest reach, so it has to win where it overlaps;
+  // otherwise the user presses the button and nothing visibly changes.
+  const toneId = T.state().pending.id;
+  T.light('#00ffff');
+  const lightId = T.state().pending.id;
+  ok('light rule replaces the pending exact rule', T.state().pending.match === 'light',
+     T.state().pending.match);
+  const inheritTag = outer && outer.getAttribute('data-dm-tone');
+  if (inverted) {
+    ok('a later light rule outranks an earlier exact rule',
+       !!inheritTag && inheritTag.slice(0, -1) === lightId,
+       'tag=' + inheritTag + ' light=' + lightId + ' tone=' + toneId);
+  } else {
+    // #003366 is LIGHT ink only after inversion; on a plain page it is dark, and
+    // the threshold rule must leave it to the exact rule.
+    ok('on a light page the threshold rule leaves dark ink to the exact rule',
+       inheritTag === null || inheritTag.slice(0, -1) === toneId,
+       'tag=' + inheritTag + ' light=' + lightId + ' tone=' + toneId);
+  }
+
   // ── case 4: our own panel is counter-inverted ───────────────────────────
   const rootEl = document.getElementById('dm-tuner-root');
   const rf = getComputedStyle(rootEl).filter;
@@ -170,6 +206,9 @@ PAGE = """<!doctype html>
   #probe {{ position: absolute; left: 40px; top: 40px; width: 160px; height: 160px;
             background: #ffffff; }}
   .aX {{ color: #003366; }}
+  /* The inheriting-child case: the <sup> takes the parent's ink, which is what
+     made a one-pass sweep lose it. */
+  .withsup {{ color: #003366; }}
   /* ink the site paints with -webkit-text-fill-color instead of color */
   .aF {{ color: #003366; -webkit-text-fill-color: #663300; }}
   /* a site rule with a specificity that beats a plain attribute selector:
@@ -182,6 +221,7 @@ PAGE = """<!doctype html>
 <div id="probe"></div>
 <p class="aX">sample text one</p>
 <p class="aX">sample text two</p>
+<p class="withsup">with unit <sup id="child">2</sup></p>
 <p class="aF">fill painted text</p>
 <div class="wrap"><div class="deep"><p class="spec1">specificity hostage</p></div></div>
 <div data-cr-bgphoto="1"><span id="inside" class="inside">restored subtree</span></div>

@@ -43,20 +43,56 @@ if [ "${#TARGETS[@]}" -eq 0 ]; then
 fi
 
 # --- copy + verify each ------------------------------------------------------
-FILES=(content.js content.css background.js popup.js popup.html popup.css manifest.json)
+# The file list is DERIVED FROM THE MANIFEST, never hand-maintained. The old
+# hard-coded list omitted `tuner.js` — the whole "tune in place" feature — so
+# every sync silently shipped a Brave copy without it, which is the same class
+# of bug this script already got bitten by twice (see above). A manifest is the
+# only authority on what an extension actually loads.
+FILES=$(python - "$SRC/manifest.json" <<'PY'
+import json, sys
+m = json.load(open(sys.argv[1], encoding="utf-8"))
+out = set()
+bg = m.get("background") or {}
+for k in ("scripts", "service_worker", "page"):
+    v = bg.get(k)
+    if isinstance(v, str):
+        out.add(v)
+    elif isinstance(v, list):
+        out.update(v)
+for cs in m.get("content_scripts", []):
+    out.update(cs.get("js") or [])
+    out.update(cs.get("css") or [])
+popup = (m.get("action") or {}).get("default_popup")
+if popup:
+    out.add(popup)
+for p in (m.get("icons") or {}).values():
+    out.add(p)
+for war in m.get("web_accessible_resources", []):
+    res = war.get("resources") if isinstance(war, dict) else war
+    for r in (res or []):
+        if "*" not in r:
+            out.add(r)
+print(" ".join(sorted(out)))
+PY
+)
+[ -n "$FILES" ] || { echo "FATAL: could not derive files from manifest.json" >&2; exit 1; }
+read -ra FILEARR <<< "$FILES"
+echo "files from manifest: ${FILEARR[*]}"
+
 rc=0
 for DST in "${TARGETS[@]}"; do
   [ -d "$DST" ] || { echo "skip (missing): $DST" >&2; continue; }
-  for f in "${FILES[@]}"; do
-    [ -f "$SRC/$f" ] && cp "$SRC/$f" "$DST/$f"
-  done
-  if [ -d "$SRC/icons" ]; then mkdir -p "$DST/icons"; cp -r "$SRC"/icons/* "$DST/icons/" 2>/dev/null || true; fi
   bad=0
-  for f in content.js content.css manifest.json popup.js; do
+  for f in "${FILEARR[@]}"; do
+    [ -f "$SRC/$f" ] || { echo "MISSING IN REPO: $f" >&2; bad=1; rc=1; continue; }
+    mkdir -p "$DST/$(dirname "$f")"
+    cp "$SRC/$f" "$DST/$f"
     diff -q "$SRC/$f" "$DST/$f" >/dev/null || { echo "MISMATCH: $DST/$f" >&2; bad=1; rc=1; }
   done
   if [ "$bad" -eq 0 ]; then
-    printf 'synced -> %s  (version %s)\n' "$DST" "$(python -c "import json,sys;print(json.load(open(sys.argv[1]))['version'])" "$DST/manifest.json")"
+    printf 'synced -> %s  (version %s, %d files)\n' "$DST" \
+      "$(python -c "import json,sys;print(json.load(open(sys.argv[1]))['version'])" "$DST/manifest.json")" \
+      "${#FILEARR[@]}"
   fi
 done
 

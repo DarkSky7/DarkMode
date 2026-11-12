@@ -80,7 +80,11 @@
 
   // ── 3. the write is the complement, one rule per parity
   ok('css writes the complement for inverted elements', /#ff0000/.test(st1.css), st1.css.slice(0, 200));
-  ok('no selector list of hundreds of paths', (st1.css.match(/\{/g) || []).length <= 4,
+  /* One rule per parity for `color`, plus one per parity for SVG `fill` (so a
+     gauge's own labels, which ignore `color`, can be reached) — six in total,
+     invariant in the number of matched elements. The property being defended is
+     "the stylesheet does not grow with the page". */
+  ok('no selector list of hundreds of paths', (st1.css.match(/\{/g) || []).length <= 6,
      (st1.css.match(/\{/g) || []).length + ' css rule(s) for ' + st1.tagged + ' elements');
 
   // ── 4. re-sweep is idempotent (baseline, not our own cyan)
