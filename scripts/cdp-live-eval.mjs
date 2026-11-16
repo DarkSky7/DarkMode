@@ -82,8 +82,24 @@ if (EXTENSION) {
   });
   await send('Runtime.enable');                 // listener FIRST, then enable
   await new Promise((r) => setTimeout(r, 1500));
+  /* Find the extension world by its HANDLE first, then by NAME. The handle test
+     alone fails on pages where the engine has not exposed __crImgStats yet (or
+     never will, e.g. a site where dark mode was never enabled): the world is
+     listed but every candidate is skipped and the tool exits 4. Measured on
+     aliexpress.us in Chromium -- five isolated contexts present, DarkMode among
+     them, no __crImgStats anywhere. --world <substring> matches the context name
+     instead (e.g. --world DarkMode). */
   const candidates = contexts.filter((c) => c.auxData && c.auxData.type === 'isolated');
+  const wanted = (argv[argv.indexOf('--world') + 1] || '').trim();
+  if (argv.includes('--world')) {
+    const byName = candidates.find((c) => (c.name || '').includes(wanted));
+    if (byName) {
+      console.error('extension world by name: ' + (byName.name || '(unnamed)') + ' origin=' + byName.origin);
+      contextId = byName.id;
+    }
+  }
   for (const c of candidates) {
+    if (contextId) break;
     const t = await send('Runtime.evaluate', {
       expression: 'typeof window.__crImgStats',
       contextId: c.id, returnByValue: true
