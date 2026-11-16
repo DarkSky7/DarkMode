@@ -707,7 +707,14 @@
           /* Two different things are worth restoring, and size cannot tell
              either of them from UI furniture:
 
-             PHOTO     many colours, wide tonal range -- a product shot.
+             PHOTO     MIXED tonal content -- wide luminance spread plus enough
+                       distinct colour buckets to be a real image. NOT a
+                       saturation test: mean saturation is dominated by the
+                       background, and measured on the live AliExpress order page
+                       a gold fitting on white scored sat 0.0055 while spreading
+                       over 21 colour buckets and 0.965 luminance. Every product
+                       photo on a white sweep reads as "flat plate" under a mean,
+                       so the mean was the bug (1.0.26).
              LIGHT ART coverage well under 1 (it was cut out of its background),
                        mostly light ink, with real tonal structure -- a WORDMARK.
                        The AliExpress header logo is exactly this: 156x40,
@@ -726,7 +733,7 @@
           const lightArt = coverage >= 0.08 && coverage <= 0.85 && meanL >= 0.5;
           return { sat: s, distinct: distinct, spread: spread, meanL: meanL,
                    coverage: coverage, lightArt: lightArt,
-                   photo: s >= 0.12 && distinct >= 24 && spread >= 0.16 };
+                   photo: spread >= 0.35 && distinct >= 8 };
         })
         .catch(function (e) {
           try { console.warn('[DarkMode] background image unmeasured, left inverted:', url, e && e.message); } catch (_) {}

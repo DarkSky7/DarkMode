@@ -97,6 +97,24 @@ def wordmark_png(w=160, h=40):
     return rgba_png(w, h, px)
 
 
+def product_png(w=120, h=120):
+    """A gold object on a white sweep -- the live order-page thumbnail.
+
+    Measured on the real page: mean saturation 0.0055, 21 colour buckets,
+    luminance spread 0.965. Mean saturation says "flat plate"; the tonal spread
+    says "photograph". It must be restored."""
+    def px(x, y):
+        cx, cy, r = w / 2.0, h / 2.0, w * 0.30
+        d = ((x - cx) ** 2 + (y - cy) ** 2) ** 0.5
+        if d <= r:
+            t = d / r
+            return (int(214 - 70 * t), int(178 - 60 * t), int(92 - 40 * t), 255)
+        if cy + r - 4 <= y <= cy + r + 6 and abs(x - cx) <= r:      # soft shadow
+            return (226, 226, 226, 255)
+        return (255, 255, 255, 255)                                  # white sweep
+    return rgba_png(w, h, px)
+
+
 def disc_png(w=110, h=110):
     """An OPAQUE shaded disc -- the Ambient Weather white-dial bug. Coverage 1.0
     and therefore never 'light art', whatever its tone."""
@@ -129,6 +147,9 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>logo</title><s
   .disc {{ width: 110px; height: 110px; margin-top: 20px;
            background-image: url("data:image/png;base64,{img4}");
            background-size: contain; background-repeat: no-repeat; }}
+  .product {{ width: 120px; height: 120px; margin-top: 20px;
+              background-image: url("data:image/png;base64,{img5}");
+              background-size: contain; background-repeat: no-repeat; }}
   #visible span {{ font-size: 16px; color: #111; }}
 </style></head><body>
 <a class="logo" id="a11y" href="#"><span class="sr">AliExpress</span></a>
@@ -138,6 +159,7 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>logo</title><s
 <div class="smallbg flat" id="flatbg"></div>
 <div class="wordmark" id="wordmark"></div>
 <div class="disc" id="disc"></div>
+<div class="product" id="product"></div>
 <div id="shadowhost"></div>
 <p>Filler paragraph so the palette sampler has ordinary body text to read.</p>
 <script>
@@ -181,7 +203,8 @@ def main():
     os.makedirs(WORK, exist_ok=True)
     with open(os.path.join(WORK, "logo.html"), "w", encoding="utf-8") as fh:
         fh.write(PAGE.format(img=png_b64(), img2=png_b64(flat=True),
-                        img3=wordmark_png(), img4=disc_png()))
+                        img3=wordmark_png(), img4=disc_png(),
+                        img5=product_png()))
     stub = os.path.join(WORK, "stub.js")
     with open(stub, "w", encoding="utf-8") as fh:
         fh.write(STUB)

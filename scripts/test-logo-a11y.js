@@ -84,6 +84,15 @@
   ok('an opaque white/grey disc is still left inverted (dial case)', depth(disc) % 2 === 1,
      'depth=' + depth(disc) + ', data-cr-bgphoto=' + disc.getAttribute('data-cr-bgphoto'));
 
+  /* ── a product photo on a WHITE sweep ─────────────────────────────────────
+     The live order-page thumbnail: mean saturation 0.0055 (mostly white
+     pixels), 21 colour buckets, spread 0.965. Judged by mean saturation it read
+     as a flat plate and stayed inverted; judged by tonal spread it is a
+     photograph and must be restored. */
+  const product = document.getElementById('product');
+  ok('a low-saturation photo on a white sweep is restored', depth(product) % 2 === 0,
+     'depth=' + depth(product) + ', data-cr-bgphoto=' + product.getAttribute('data-cr-bgphoto'));
+
   /* ── shadow DOM: page CSS cannot reach inside a shadow root at all ────────
      Most of the new "order centre" style web apps are built from custom
      elements, and an <img> inside one inherits the page filter while NONE of
