@@ -640,6 +640,13 @@
       catch (e) { return !!(el.textContent || '').trim(); }        // be conservative
       const range = document.createRange();
 
+      function alphaZero(colour) {
+        const m = /rgba?\(([^)]+)\)/.exec(colour || '');
+        if (!m) return false;
+        const parts = m[1].split(',');
+        return parts.length > 3 && parseFloat(parts[3]) === 0;
+      }
+
       /* Style OR geometry, checked from the text's parent up to `el`. Both are
          needed: an sr-only span sets `clip`/`clip-path`, and 1x1 boxes hide their
          text by CLIPPING it -- but `range.getClientRects()` returns the text's own
@@ -653,8 +660,14 @@
           try { cs = getComputedStyle(a); } catch (e) { break; }
           if (cs.visibility === 'hidden' || cs.opacity === '0' ||
               parseFloat(cs.fontSize) < 1) return true;
-          const c = parseColor(cs.color);
-          if (c && c[3] === 0) return true;
+          /* Local alpha test, NOT parseColor(): that lives inside
+             startSurfaceNormaliser, a SIBLING closure, so referring to it here
+             threw ReferenceError on every text node -- which the conservative
+             catch below turned into "has text", i.e. the fix silently did
+             nothing on the very page it was written for. scripts/test-logo-a11y.py
+             (real engine, real Chrome) is what caught it; the unit harness could
+             not, because it evaluates both functions in one page scope. */
+          if (alphaZero(cs.color)) return true;
           const clips = /hidden|clip|auto|scroll/.test(cs.overflowX) ||
                         /hidden|clip|auto|scroll/.test(cs.overflowY) ||
                         (cs.clip && cs.clip !== 'auto') ||
@@ -686,7 +699,12 @@
               if (hiddenBy(n.parentElement, r)) continue;
               return true;
             }
-          } catch (e) { return true; }                            // be conservative
+          } catch (e) {
+            /* Conservative, but never silent: a throw here once meant "assume
+               visible" and quietly disabled the whole fix. */
+            try { console.warn('[DarkMode] showsText could not measure; assuming text is visible:', e && e.message); } catch (_) {}
+            return true;
+          }
         }
         n = walker.nextNode();
       }

@@ -53,6 +53,21 @@ Both real causes of this report were invisible from the old panel: a rule emitte
 at the site's own specificity (1.0.22's `:is()` repetition) and ink the site
 paints with `-webkit-text-fill-color` (1.0.22's second declaration).
 
+## The bug this fix nearly shipped with
+
+`showsText()` first called `parseColor()`, which lives inside
+`startSurfaceNormaliser` — a **sibling** closure, not an enclosing one. Legal to
+write, impossible to call: every text node threw `ReferenceError`, and the
+conservative `catch` turned that into "text is visible". The release would have
+looked correct and done nothing at all on the page it was written for.
+
+`test-showstext.py` could not catch it: it extracts both functions and evaluates
+them in one page scope, where the reference resolves. The end-to-end harness
+`test-logo-a11y.py` did catch it — the fixture's screen-reader logo stayed
+unrestored until the alpha test was made local. The catch is no longer silent
+(it warns to the console), and `test-showstext.py` now asserts the source-level
+property directly: `showsText` must not mention `parseColor(`.
+
 ## Also
 
 - `scripts/diag-images.js` v2 prints a **census** before its findings — element
@@ -71,9 +86,15 @@ paints with `-webkit-text-fill-color` (1.0.22's second declaration).
   `showsText` out of `content.js` and runs them in headless Chrome against every
   sr-only recipe (clip, clip-path, negative indent, `font-size:0`,
   `color:transparent`, `visibility:hidden`, `display:none`, `opacity:0`,
-  off-box positioning) plus both visible-text cases: **13/13 assertions, and 3
+  off-box positioning) plus both visible-text cases: **13/13 assertions, and 4
   source assertions on the call site**. Its first run failed the `clip` and
   `clip-path` cases — that is the defect it existed to find.
+- `scripts/test-logo-a11y.py` (new) — end-to-end against the **real engine**:
+  two background-image anchors that differ only in whether their text is
+  visible, driven through the real `content.css` + `content.js` in a real Chrome
+  with a real sampled raster. Asserts the a11y-text logo is restored
+  (`data-cr-bgphoto=1`, even invert depth 2) and the visible-text one is not
+  (depth 1). This is the harness that exposed the sibling-closure bug above.
 - `scripts/test-inversion.py` — ALL PASS, now also asserting the panel confirms a
   landed rule and names the computed colour.
 - `scripts/test-bgphoto.py` — ALL PASS against the live Ambient Weather

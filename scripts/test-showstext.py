@@ -58,6 +58,12 @@ def extract(name, src):
     raise AssertionError("unbalanced braces extracting " + name)
 
 
+def strip_comments(text):
+    """Comments must not satisfy (or break) a source-level assertion."""
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+    return re.sub(r"//[^\n]*", "", text)
+
+
 CASES = [
     # (element id, expected showsText, what it is)
     ("clip", False, "sr-only via clip:rect(0 0 0 0) + 1px box (AliExpress logo recipe)"),
@@ -136,6 +142,13 @@ def main():
                     "(el.textContent || '').trim()) continue;" not in src, ""))
     results.append(("showsText is reachable for diagnostics",
                     "window.__crShowsText = showsText" in src, ""))
+    # Self-containment: a reference to a helper that lives in a SIBLING closure
+    # throws ReferenceError at runtime, and the conservative catch turns that into
+    # "has text" -- which silently disables the fix. This harness cannot see
+    # closures (it evaluates both functions in one page scope), so assert the
+    # source-level property instead. (Caught for real by test-logo-a11y.py.)
+    results.append(("showsText does not reach outside its closure",
+                    "parseColor(" not in strip_comments(shows_text), ""))
 
     os.makedirs(WORK, exist_ok=True)
     html = (build_html(parse_color, shows_text, json.dumps(CASES))
