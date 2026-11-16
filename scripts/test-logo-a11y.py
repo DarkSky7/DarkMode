@@ -42,13 +42,20 @@ def node():
     return None
 
 
-def png_b64(w=24, h=24):
-    """A genuinely colourful raster -- must clear the 0.12 saturation floor."""
+def png_b64(w=24, h=24, flat=False):
+    """A genuinely colourful raster, or a saturated FLAT plate.
+
+    Both clear the 0.12 saturation floor; only the first is photographic (many
+    colour buckets, wide luminance spread). That is how an 80x80 product
+    thumbnail is told apart from an 80x80 icon."""
     rows = b""
     for y in range(h):
         rows += b"\x00"
         for x in range(w):
-            rows += bytes(((x * 10) % 256, (y * 10) % 256, 200))
+            if flat:
+                rows += bytes((30, 60, 180))
+            else:
+                rows += bytes(((x * 10) % 256, (y * 10) % 256, 200))
     def chunk(tag, data):
         return (struct.pack(">I", len(data)) + tag + data +
                 struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF))
@@ -66,10 +73,17 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>logo</title><s
   .sr {{ position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
          overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }}
   #visible {{ margin-top: 20px; }}
+  .smallbg {{ width: 80px; height: 80px; margin-top: 20px;
+              background-image: url("data:image/png;base64,{img}");
+              background-size: contain; background-repeat: no-repeat; }}
+  .flat {{ background-image: url("data:image/png;base64,{img2}"); }}
   #visible span {{ font-size: 16px; color: #111; }}
 </style></head><body>
 <a class="logo" id="a11y" href="#"><span class="sr">AliExpress</span></a>
 <a class="logo" id="visible" href="#"><span>AliExpress</span></a>
+<img class="logo" id="plainimg" alt="" src="data:image/png;base64,{img}">
+<div class="smallbg" id="smallbg"></div>
+<div class="smallbg flat" id="flatbg"></div>
 <p>Filler paragraph so the palette sampler has ordinary body text to read.</p>
 </body></html>"""
 
@@ -101,7 +115,7 @@ def main():
         return 0
     os.makedirs(WORK, exist_ok=True)
     with open(os.path.join(WORK, "logo.html"), "w", encoding="utf-8") as fh:
-        fh.write(PAGE.format(img=png_b64()))
+        fh.write(PAGE.format(img=png_b64(), img2=png_b64(flat=True)))
     stub = os.path.join(WORK, "stub.js")
     with open(stub, "w", encoding="utf-8") as fh:
         fh.write(STUB)

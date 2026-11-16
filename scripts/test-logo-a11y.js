@@ -48,5 +48,22 @@
   ok('the visible-text logo stays inside the page filter', depth(vis) % 2 === 1,
      'depth=' + depth(vis));
 
+  /* ── the two other ways a product thumbnail can be painted ─────────────
+     A plain <img> is covered by the stylesheet's media rule, so if a photo is
+     blue on a real page, the element is NOT a plain <img>. Prove that here, and
+     measure the OTHER candidate: a small photographic background-image, which
+     the bg-photo pass refuses below 10,000 px² (≈100x100) as "sprite/icon". */
+  const plain = document.getElementById('plainimg');
+  ok('a plain <img> photo is re-inverted (net even)', depth(plain) % 2 === 0, 'depth=' + depth(plain));
+
+  const small = document.getElementById('smallbg');
+  ok('an 80x80 PHOTOGRAPHIC background is restored (order-list thumbnail)',
+     depth(small) % 2 === 0,
+     'area 6400, depth=' + depth(small) + ', data-cr-bgphoto=' + small.getAttribute('data-cr-bgphoto'));
+
+  const flat = document.getElementById('flatbg');
+  ok('an 80x80 FLAT plate is still left inverted (icon, not photo)', depth(flat) % 2 === 1,
+     'depth=' + depth(flat) + ', data-cr-bgphoto=' + flat.getAttribute('data-cr-bgphoto'));
+
   return out;
 })();

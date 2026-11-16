@@ -586,16 +586,29 @@
           const cx = new OffscreenCanvas(W, H).getContext('2d', { willReadFrequently: true });
           cx.drawImage(bm, 0, 0, W, H);
           const d = cx.getImageData(0, 0, W, H).data;
-          let sat = 0, n = 0;
+          let sat = 0, n = 0, minL = 1, maxL = 0;
+          const buckets = new Set();
           for (let i = 0; i < d.length; i += 4) {
             if (d[i + 3] < 40) continue;
             const r = d[i] / 255, g = d[i + 1] / 255, bl = d[i + 2] / 255;
             const hi = Math.max(r, g, bl), lo = Math.min(r, g, bl);
             sat += hi === 0 ? 0 : (hi - lo) / hi;
+            /* A photograph spreads over many colours and a wide luminance range;
+               flat UI art (a plate, a badge, a glyph on a solid) uses a handful.
+               This is what lets SMALL backgrounds be judged: size alone cannot
+               tell an 80x80 product thumbnail from an 80x80 icon. */
+            buckets.add(((d[i] >> 3) << 10) | ((d[i + 1] >> 3) << 5) | (d[i + 2] >> 3));
+            const l = 0.2126 * r + 0.7152 * g + 0.0722 * bl;
+            if (l < minL) minL = l;
+            if (l > maxL) maxL = l;
             n++;
           }
           if (bm.close) bm.close();
-          return { sat: n ? sat / n : 0 };
+          const s = n ? sat / n : 0;
+          const distinct = buckets.size;
+          const spread = n ? maxL - minL : 0;
+          return { sat: s, distinct: distinct, spread: spread,
+                   photo: s >= 0.12 && distinct >= 24 && spread >= 0.16 };
         })
         .catch(function (e) {
           try { console.warn('[DarkMode] background image unmeasured, left inverted:', url, e && e.message); } catch (_) {}
@@ -722,7 +735,14 @@
         if (MEDIA_TAGS_BG.test(el.tagName)) continue;
         if (el.dataset.crBgphoto) continue;                 // already handled
         const box = el.getBoundingClientRect();
-        if (box.width * box.height < 10000) continue;       // sprites/icons
+        /* Two-tier floor (1.0.24). 10,000 px² stays the bar for anything we
+           cannot judge by content, but a real product thumbnail is 80x80
+           (6,400) and ordering pages paint it as a background-image: AliExpress
+           order rows measured a photographic 67x63 fitting that rendered BLUE
+           (the complement of brass) because the floor skipped it. Small
+           backgrounds are now allowed when the sample looks photographic —
+           see `photo` in imageColourfulness. */
+        if (box.width * box.height < 2500) continue;        // sprites/icons
         const cs = getComputedStyle(el);
         const bi = cs.backgroundImage;
         if (!bi || bi === 'none' || bi.indexOf('url(') === -1) continue;
@@ -739,6 +759,7 @@
         (function (node, url) {
           imageColourfulness(url).then(function (st) {
             if (!st || st.sat < 0.12) return;               // flat plate / unmeasurable
+            if (box.width * box.height < 10000 && !st.photo) return;   // small + not photographic
             if (!isDark()) return;
             if (getComputedStyle(node).backgroundImage === 'none') return;
             node.dataset.crBgphoto = '1';
