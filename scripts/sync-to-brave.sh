@@ -72,7 +72,7 @@ for war in m.get("web_accessible_resources", []):
     for r in (res or []):
         if "*" not in r:
             out.add(r)
-print(" ".join(sorted(out)))
+print(" ".join(sorted(out | {"manifest.json"})))
 PY
 )
 [ -n "$FILES" ] || { echo "FATAL: could not derive files from manifest.json" >&2; exit 1; }

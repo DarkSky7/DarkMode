@@ -538,9 +538,11 @@
     else defVal = '__this';
 
     pending = null;
-    const mineRGB = parseRGB(mine);
-    const mineLum = mineRGB ? lum(mineRGB) : 0;
-    const seed = mineLum >= SEED_WHITE_MIN ? DEFAULT_INK : mine;
+    /* Grey seeds cyan too, not only near-white, and it uses THE SAME test the
+       sweep uses -- so the knob can never "replace" an element with the colour
+       it is already showing, and a mid-grey click offers cyan like a white one
+       does. */
+    const seed = inkIsLight(mine) ? DEFAULT_INK : mine;
     txtInput.value = seed;
     shadow.getElementById('txthex').textContent =
       seed === mine ? mine : mine + '  →  ' + seed;
@@ -732,21 +734,54 @@
      the 129 light-text elements, so the values recoloured and the labels did
      not. A threshold rule covers the whole page no matter how many colours or
      classes the site uses, and it keeps covering text the site adds later.
-     WCAG relative luminance, 0.45 = the point where ink stops reading as
-     "ink" and starts reading as "white" on a dark backdrop. */
-  const LIGHT_MIN = 0.45;
+     WCAG relative luminance. 0.45 was the old floor and it was simply wrong:
+     on an INVERTED page every site-dark colour renders light, so the greys
+     that actually appear on screen are the site's own light greys -- measured
+     on the AliExpress cart (2026-11-16): #8a8a8a (L 0.254) x57 and #dddddd
+     (L 0.723) x14 were all skipped, because a page whose ink renders mid-grey
+     on near-black is exactly the page where grey needs replacing. 0.15 is
+     above the near-black backdrop (#111 = 0.006) and below the greys these
+     sites ship, so "grey text" now means grey text.
+     NEUTRALITY IS NEW and load-bearing. Lowering the floor alone would have
+     swept up every saturated colour that happens to be bright -- links,
+     prices, sale badges -- and turned them cyan. "White or grey" means the
+     channels agree (spread <= 14/255); anything with real chroma keeps its hue
+     unless it is bright enough to read as white regardless (L >= 0.62). */
+  const LIGHT_MIN = 0.15;
+  /* NEUTRALITY IS A SATURATION TEST, NOT A CHANNEL-SPREAD TEST. The first
+     version allowed spread <= 14/255, which silently excluded the warm greys
+     these sites actually use: AliExpress renders 87 elements at #9f9b8d
+     (spread 18) -- light grey with a warm cast -- and both the coverage count
+     and the post-paint check called them "not neutral", so they agreed the page
+     was complete while 87 grey items sat unrecoloured. HSL saturation is
+     hue-independent and scale-aware: #9f9b8d is 8.6% saturated, a grey; a sale
+     badge at #fe76be is 100%, untouched; bright yellow (#ffff00) is 100% and
+     stays yellow instead of being mistaken for white. */
+  const NEUTRAL_SAT = 0.20;
+  function saturation(hex) {
+    const c = parseRGB(hex);
+    if (!c) return 1;
+    const r = c[0] / 255, g = c[1] / 255, b = c[2] / 255;
+    const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
+    if (d === 0) return 0;
+    const l = (mx + mn) / 2;
+    return d / (1 - Math.abs(2 * l - 1));
+  }
+  function inkIsNeutral(hex) {
+    return !!parseRGB(hex) && saturation(hex) <= NEUTRAL_SAT;
+  }
   /* The knob used to be seeded with whatever colour the element already shows,
      which makes "replace this white with a colour" a no-op until you notice the
      swatch. Near-white ink therefore seeds CYAN; anything else keeps its own
      colour, so nudging an accent stays a nudge. */
   const DEFAULT_INK = '#00ffff';
-  /* WCAG luminance of the ink the eye sees. 0.60 rather than 0.80: the light
-     greys these pages actually use (#e6e6e6 = 0.787, #cecdc9 = 0.62) are the
-     "white" a user points at, and 0.80 missed both. */
-  const SEED_WHITE_MIN = 0.60;
   function inkIsLight(hex) {
     const c = parseRGB(hex);
-    return !!c && lum(c) >= LIGHT_MIN;
+    if (!c) return false;
+    /* Light AND colourless. The old rule also accepted anything bright
+       regardless of chroma, which is how a picker ends up offering to turn a
+       yellow price tag cyan -- not what "white and grey" means. */
+    return lum(c) >= LIGHT_MIN && inkIsNeutral(hex);
   }
   function isGradientText(el) {
     const cs = getComputedStyle(el);
