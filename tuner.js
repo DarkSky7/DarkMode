@@ -538,12 +538,19 @@
     else defVal = '__this';
 
     pending = null;
-    txtInput.value = mine;               // seed the knob with what this element shows
-    shadow.getElementById('txthex').textContent = mine;
+    const mineRGB = parseRGB(mine);
+    const mineLum = mineRGB ? lum(mineRGB) : 0;
+    const seed = mineLum >= SEED_WHITE_MIN ? DEFAULT_INK : mine;
+    txtInput.value = seed;
+    shadow.getElementById('txthex').textContent =
+      seed === mine ? mine : mine + '  →  ' + seed;
     if (defVal.indexOf('__tone:') === 0) applyTone(defVal.slice(7));
     else if (defVal === '__tone') applyTone(mine);
     else setPending(defVal === '__this' ? uniqueSelectorFor(el) : defVal);
     scopeSel.value = defVal;
+    /* applyTone/applyLight seed pending.color from `mine`; carry the cyan seed
+       through so the first render already writes it. */
+    if (pending && seed !== mine) { pending.color = seed; update(); }
 
     customInput.hidden = true;
     customInput.value = '';
@@ -728,6 +735,15 @@
      WCAG relative luminance, 0.45 = the point where ink stops reading as
      "ink" and starts reading as "white" on a dark backdrop. */
   const LIGHT_MIN = 0.45;
+  /* The knob used to be seeded with whatever colour the element already shows,
+     which makes "replace this white with a colour" a no-op until you notice the
+     swatch. Near-white ink therefore seeds CYAN; anything else keeps its own
+     colour, so nudging an accent stays a nudge. */
+  const DEFAULT_INK = '#00ffff';
+  /* WCAG luminance of the ink the eye sees. 0.60 rather than 0.80: the light
+     greys these pages actually use (#e6e6e6 = 0.787, #cecdc9 = 0.62) are the
+     "white" a user points at, and 0.80 missed both. */
+  const SEED_WHITE_MIN = 0.60;
   function inkIsLight(hex) {
     const c = parseRGB(hex);
     return !!c && lum(c) >= LIGHT_MIN;
@@ -788,10 +804,32 @@
        SVG text is the exception: it paints with `fill`, so reading `color`
        there measures an inherited HTML value that has nothing to do with the
        pixels. Reading `fill` is what lets a gauge's dial labels into a rule. */
-    let ink = cs.webkitTextFillColor || cs.color;
+    /* A form control paints with `color`; its -webkit-text-fill-color is a UA
+       default that can disagree with what the field actually shows. */
+    let ink = FORM_TEXT_TAGS.test(el.tagName)
+      ? cs.color
+      : (cs.webkitTextFillColor || cs.color);
     if (isSvgText(el) && cs.fill && cs.fill !== 'none' && !/^currentcolor$/i.test(cs.fill)) ink = cs.fill;
     const rgb = parseRGB(ink);
-    if (!rgb || rgb[3] < 0.999) return tagged && cached ? cached.c : '';
+    if (!rgb) return tagged && cached ? cached.c : '';
+    /* ALPHA INK IS NOT UNMEASURABLE (1.0.27). This used to reject anything with
+       alpha < 0.999, which silently excluded a whole class of real text: sites
+       write rgba(0,0,0,0.9) for body copy, navigation labels and form text all
+       the time. Measured on AliExpress search: 75 of 328 visible white-on-screen
+       elements were rgba ink, so "everything light" reached 253 and the panel
+       still reported "covers 282 of 282" — a complete-looking number over an
+       incomplete job. Composite the ink over its backdrop instead, which is what
+       the screen does. Below 0.05 stays unmeasurable: that is background-clip
+       gradient text, where repainting destroys the effect. */
+    let base = [rgb[0], rgb[1], rgb[2]];
+    if (rgb[3] < 0.999) {
+      if (rgb[3] < 0.05) return tagged && cached ? cached.c : '';
+      const back = backdropOf(el);
+      const a = rgb[3];
+      base = [Math.round(rgb[0] * a + back[0] * (1 - a)),
+              Math.round(rgb[1] * a + back[1] * (1 - a)),
+              Math.round(rgb[2] * a + back[2] * (1 - a))];
+    }
     /* CACHE RULES, and getting them wrong is what made a saved rule half-apply
        on reload. While an element carries OUR attribute its live colour is our
        paint, so the baseline is the only truth. While it does not, the live
@@ -802,8 +840,8 @@
     if (tagged && cached) return cached.c;
     const parity = invertDepth(el) % 2;
     const shown = parity === 1
-      ? [255 - rgb[0], 255 - rgb[1], 255 - rgb[2]]
-      : [rgb[0], rgb[1], rgb[2]];
+      ? [255 - base[0], 255 - base[1], 255 - base[2]]
+      : [base[0], base[1], base[2]];
     const h = (n) => n.toString(16).padStart(2, '0');
     const hex = '#' + h(shown[0]) + h(shown[1]) + h(shown[2]);
     // Only remember colours that are the PAGE's, never the ones we painted.
@@ -819,8 +857,17 @@
      reports a LOWERCASE tagName, while HTML's reports uppercase. */
   const NON_TEXT_TAGS = /^(script|style|noscript|template|title|meta|link|base|head|path|defs)$/i;
 
+  /* FORM CONTROLS OWN TEXT TOO (1.0.27). This test used to accept only an
+     element with a direct child text node, so <input>, <textarea> and <select>
+     were invisible to the whole tuning system: not counted in coverage, never
+     tagged, never recoloured. Measured on AliExpress search: 46 of 268 visible
+     white-on-screen text elements were form controls (the search box and every
+     quantity field), and the panel still said "covers 253 of 253". A control's
+     visible text is not a text node — it is painted by the widget. */
+  const FORM_TEXT_TAGS = /^(INPUT|TEXTAREA|SELECT)$/;
   function ownsText(el) {
     if (NON_TEXT_TAGS.test(el.tagName)) return false;
+    if (FORM_TEXT_TAGS.test(el.tagName)) return true;
     for (let n = el.firstChild; n; n = n.nextSibling) {
       if (n.nodeType === 3 && n.nodeValue && n.nodeValue.trim()) return true;
     }

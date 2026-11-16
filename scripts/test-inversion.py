@@ -104,13 +104,30 @@ TEST_JS = r"""
     ok('even-depth fixture present', false, 'missing [data-cr-bgphoto]/.inside');
   }
 
-  // ── case 3: capture seeds the RENDERED colour ───────────────────────────
-  const sample = document.querySelector('p.aX');
-  T.capture(sample);
+  // ── case 3: the knob's seed (1.0.27) ────────────────────────────────────
+  // A near-white capture seeds CYAN -- "replace this white with a colour" is the
+  // common job, and seeding the white that is already there makes the first
+  // attempt a no-op. Darker ink keeps its own colour so a nudge stays a nudge.
+  // Built so it RENDERS near-white on both harness pages: computed #333333 is
+  // complemented to #cccccc on the inverted page, and #e6e6e6 is already light
+  // on the plain one. (.aX cannot be reused here -- it renders dark on the plain
+  // page, so it correctly keeps its own colour there.)
+  const white = document.createElement('p');
+  white.textContent = 'white probe';
+  white.style.color = inverted ? 'rgb(51,51,51)' : 'rgb(230,230,230)';
+  document.body.appendChild(white);
+  T.capture(white);
   const seeded = T.state().pending.color;
-  // .aX is #003366 in the source; on an inverted page it looks like #ffcc99.
-  ok('capture seeds rendered colour',
-     seeded === (inverted ? '#ffcc99' : '#003366'), seeded);
+  ok('a near-white capture seeds the cyan default', seeded === '#00ffff', seeded);
+
+  const accent = document.createElement('p');
+  accent.textContent = 'accent probe';
+  accent.style.color = 'rgb(0,121,255)';
+  document.body.appendChild(accent);
+  T.capture(accent);
+  const seededAccent = T.state().pending.color;
+  ok('a mid-tone capture keeps its own colour',
+     seededAccent === (inverted ? '#ff8600' : '#0079ff'), seededAccent);
 
   // ── case 3b: ink the site paints with -webkit-text-fill-color ───────────
   // .aF is #663300 by fill and #003366 by color: grouping on `color` would put
