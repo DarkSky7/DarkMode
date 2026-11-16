@@ -27,7 +27,7 @@
   let root = null, shadow = null, styleEl = null, panel = null;
   let picking = false, pending = null, infoEl = null, contrastEl = null, scopeSel = null, customInput = null;
   let txtInput = null, bgInput = null, bgChk = null, listEl = null, exportEl = null;
-  let hi = null, perHost = [], globalRules = [], lastPick = null, mirrorEl = null, groupsEl = null;
+  let hi = null, perHost = [], globalRules = [], lastPick = null, mirrorEl = null, groupsEl = null, verifyEl = null;
   let coverageEl = null, coverBtn = null;
   let lastGroups = new Map(), lastMine = '', lastKey = '', seq = 0, mo = null, moTimer = null, covTimer = null;
   let ready = null;   // resolves once storage has been read; saves await it
@@ -297,6 +297,7 @@
     groupsEl = mk('div', { cls: 'dim', text: '', id: 'groups' });
     contrastEl = mk('div', { cls: 'dim', text: '', id: 'contrast' });
     mirrorEl = mk('div', { cls: 'dim', text: '', id: 'mirror' });
+    verifyEl = mk('div', { cls: 'dim', text: '', id: 'verify' });
 
     scopeSel = mk('select', { id: 'scope' });
     scopeSel.addEventListener('change', onScopeChange);
@@ -361,6 +362,7 @@
     panel.appendChild(mk('div', { cls: 'row' }, [mk('span', { cls: 'lab', text: 'bg' }), bgInput]));
     panel.appendChild(contrastEl);
     panel.appendChild(mirrorEl);
+    panel.appendChild(verifyEl);
     panel.appendChild(mk('div', { cls: 'box' }, [saveBtn, forgetBtn, exportBtn]));
     panel.appendChild(exportEl);
     panel.appendChild(listEl);
@@ -1036,6 +1038,47 @@
     return odd;
   }
 
+  /* ────────────────────────── DID THE RULE ACTUALLY LAND? ────────────── */
+  /* Twice now the rule was written, the panel showed a colour, and the pixels
+     never moved: once because the rule was emitted at the site's own
+     specificity, once because the site painted ink with
+     -webkit-text-fill-color. Both were invisible from the panel, and what Mike
+     saw was "selecting a single element isn't helping". Writing a rule is not
+     the same as winning, so measure what the element COMPUTES after the
+     stylesheet is in and say which one happened. */
+  function sameRGB(a, b) {
+    return !!a && !!b && Math.abs(a[0] - b[0]) < 3 && Math.abs(a[1] - b[1]) < 3 &&
+           Math.abs(a[2] - b[2]) < 3;
+  }
+
+  /* The panel speaks hex everywhere else; getComputedStyle answers in rgb(). */
+  function hexOf(rgb) {
+    if (!rgb) return '?';
+    return '#' + [rgb[0], rgb[1], rgb[2]].map((v) => (v | 0).toString(16).padStart(2, '0')).join('');
+  }
+
+  function verifyApplied(target, odd) {
+    if (!verifyEl) return;
+    if (!pending || !pending.color) { verifyEl.textContent = ''; verifyEl.className = 'dim'; return; }
+    const want = parseRGB(odd ? complementCss(pending.color) : pending.color);
+    let cs, ink = '', fill = '';
+    try {
+      cs = getComputedStyle(target);
+      ink = cs.color || '';
+      fill = cs.webkitTextFillColor || '';
+    } catch (e) { verifyEl.textContent = ''; verifyEl.className = 'dim'; return; }
+    const hit = sameRGB(parseRGB(ink), want) || sameRGB(parseRGB(fill), want);
+    const shown = hexOf(parseRGB(ink));
+    if (hit) {
+      verifyEl.textContent = '✔ rule applied — element computes ' + shown;
+      verifyEl.className = 'ok';
+    } else {
+      verifyEl.textContent = '✖ rule written but OVERRIDDEN — element still computes ' + shown +
+        ' (a site rule outranks it, or the ink is painted another way)';
+      verifyEl.className = 'warn';
+    }
+  }
+
   /* ─────────────────────────────── live preview + contrast ───────────── */
   function update() {
     if (!pending) return;
@@ -1070,6 +1113,7 @@
           ' to render ' + String(pending.color).toLowerCase()
         : '';
     }
+    verifyApplied(target, odd);
     renderCoverage();
   }
 

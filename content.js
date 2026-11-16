@@ -610,6 +610,92 @@
       return /\.svg(?:[?#"')]|$)/i.test(bgImage);
     }
 
+    /* ── "HAS TEXT" HAS TO MEAN "SHOWS TEXT" (1.0.23, 2026-11-16) ─────────────
+       The restore test used to be `(el.textContent || '').trim()`, i.e. any text
+       at all vetoed the restore. AliExpress's header logo is the measured case
+       (Mike, 2026-11-16, order pages in Brave): `a.pc-header--logoImg--mDbiT4k`
+       paints the logo as a background image and carries a screen-reader
+       <span>AliExpress</span> inside it — textContent length 10, rendered
+       nowhere. The old test read that as "has text", refused to restore, and the
+       logo therefore rendered as a photo-negative on every order page, with the
+       diagnostic's only finding being exactly this element:
+         why=BG-IN-TEXT-EL  paint=bg:ae-pic-a1.aliexpress-media.com  text=10
+       Hidden text needs no filter correction, so it must not veto a restore.
+
+       What MUST still veto it is text a human can see. Restoring an element
+       double-inverts its whole subtree, so visible ink returns to the site's
+       light-theme colour — measured on Ambient Weather's `a.header`: #313236 on
+       #000000, contrast 1.64:1, invisible.
+
+       getClientRects() is the only thing that knows about clipping,
+       `overflow:hidden`, `clip-path`, `clip:rect(0 0 0 0)` and negative
+       `text-indent`, so decide from rendered geometry rather than by pattern
+       matching the sr-only recipe of the week. Thresholds: a rect must be at
+       least 4x4 CSS px AND intersect the element's own border box. */
+    function showsText(el) {
+      const own = el.getBoundingClientRect();
+      if (own.width < 1 || own.height < 1) return false;
+      let walker;
+      try { walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null); }
+      catch (e) { return !!(el.textContent || '').trim(); }        // be conservative
+      const range = document.createRange();
+
+      /* Style OR geometry, checked from the text's parent up to `el`. Both are
+         needed: an sr-only span sets `clip`/`clip-path`, and 1x1 boxes hide their
+         text by CLIPPING it -- but `range.getClientRects()` returns the text's own
+         unclipped rects, so `sr-only` (the AliExpress recipe) still measures
+         ~78x19 and looks perfectly visible. Caught by scripts/test-showstext.py. */
+      function hiddenBy(n, rect) {
+        let a = n, guard = 0;
+        const area = rect.width * rect.height;
+        while (a && a.nodeType === 1 && guard++ < 40) {
+          let cs;
+          try { cs = getComputedStyle(a); } catch (e) { break; }
+          if (cs.visibility === 'hidden' || cs.opacity === '0' ||
+              parseFloat(cs.fontSize) < 1) return true;
+          const c = parseColor(cs.color);
+          if (c && c[3] === 0) return true;
+          const clips = /hidden|clip|auto|scroll/.test(cs.overflowX) ||
+                        /hidden|clip|auto|scroll/.test(cs.overflowY) ||
+                        (cs.clip && cs.clip !== 'auto') ||
+                        (cs.clipPath && cs.clipPath !== 'none');
+          if (clips && area > 0) {
+            const b = a.getBoundingClientRect();
+            const ow = Math.max(0, Math.min(b.right, rect.right) - Math.max(b.left, rect.left));
+            const oh = Math.max(0, Math.min(b.bottom, rect.bottom) - Math.max(b.top, rect.top));
+            if ((ow * oh) / area < 0.25) return true;   // text is mostly outside the box that clips it
+          }
+          if (a === el) break;
+          a = a.parentElement;
+        }
+        return false;
+      }
+
+      let n = walker.nextNode();
+      while (n) {
+        const s = n.nodeValue;
+        if (s && s.trim() && n.parentElement) {
+          try {
+            range.selectNodeContents(n);
+            const rects = range.getClientRects();
+            for (let i = 0; i < rects.length; i++) {
+              const r = rects[i];
+              if (r.width < 4 || r.height < 4) continue;
+              if (r.right <= own.left || r.left >= own.right ||
+                  r.bottom <= own.top || r.top >= own.bottom) continue;
+              if (hiddenBy(n.parentElement, r)) continue;
+              return true;
+            }
+          } catch (e) { return true; }                            // be conservative
+        }
+        n = walker.nextNode();
+      }
+      return false;
+    }
+    /* Exposed so scripts/diag-images.js and the test harness can ask the engine's
+       own question instead of re-deriving it. */
+    try { window.__crShowsText = showsText; } catch (e) {}
+
     function pass() {
       if (!isDark()) return;
       const els = document.querySelectorAll('*');
@@ -624,7 +710,7 @@
         if (!bi || bi === 'none' || bi.indexOf('url(') === -1) continue;
         if (/gradient/.test(bi)) continue;                  // not individually restorable
         if (isVectorArt(bi)) continue;                      // gauge/dial/logo: let it invert
-        if ((el.textContent || '').trim()) continue;        // text stays in the filtered world
+        if (showsText(el)) continue;                        // VISIBLE text stays in the filtered world
         const repeats = cs.backgroundRepeat !== 'no-repeat';
         const autoSize = cs.backgroundSize === 'auto';
         if (repeats && autoSize) continue;                  // decorative tile/plate

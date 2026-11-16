@@ -1,7 +1,9 @@
 /* DarkMode popup — ask once, remember optionally. */
 'use strict';
 
-const VERSION = '1.0.21';
+/* Read it from the manifest: the hand-typed string was left at 1.0.21 while
+   the package was 1.0.22, so the popup misreported which build was running. */
+const VERSION = (() => { try { return chrome.runtime.getManifest().version; } catch (e) { return '?'; } })();
 document.getElementById('ver').textContent = 'v' + VERSION;
 
 async function currentTab() {

@@ -63,6 +63,17 @@ TEST_JS = r"""
   ok('intent preserved in state', st.pending && st.pending.color === '#00ffff',
      st.pending && st.pending.color);
 
+  // ── case 1b: the panel must SAY whether the rule won ─────────────────────
+  // "selecting a single element isn't helping" was reported twice while the
+  // panel silently showed a colour. The verify line measures the element's
+  // computed ink after the stylesheet is in, so a lost rule is visible.
+  const verify = sr.getElementById('verify');
+  ok('panel confirms the rule landed', /^✔ rule applied/.test((verify.textContent || '').trim()),
+     verify.textContent);
+  ok('panel names the colour the element computes',
+     (verify.textContent || '').toLowerCase().indexOf(inverted ? '#ff0000' : '#00ffff') !== -1,
+     verify.textContent);
+
   // ── case 5 (checked here: state must still be the probe) ────────────────
   const mirror = sr.getElementById('mirror');
   if (inverted) {
