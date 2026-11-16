@@ -52,7 +52,7 @@ TEST_JS = r"""
   const st = T.state();
   const css = st.css;
   const inverted = document.documentElement.classList.contains('cr-dark');
-  const probeRule = (css.match(/#probe\{[^}]*\}/) || [''])[0];
+  const probeRule = (css.match(/#probe(?::is\([^{]*)?\{[^}]*\}/) || [''])[0];
   ok('probe rule emitted', !!probeRule, probeRule);
   if (inverted) {
     ok('inverted: cyan intent writes #ff0000', probeRule.indexOf('#ff0000') !== -1, probeRule);
@@ -83,7 +83,7 @@ TEST_JS = r"""
     b2.value = '#00ffff';
     b2.dispatchEvent(new Event('input'));
     const css2 = T.state().css;
-    const rule2 = (css2.match(/(?:#inside|\.inside)\{[^}]*\}/) || [''])[0];
+    const rule2 = (css2.match(/(?:#inside|\.inside)(?::is\([^{]*)?\{[^}]*\}/) || [''])[0];
     if (inverted) {
       ok('even depth: NOT complemented', rule2.indexOf('#00ffff') !== -1, rule2);
     } else {
@@ -179,6 +179,44 @@ TEST_JS = r"""
      inverted ? htmlF === 'invert(1)' : (htmlF === 'none' || htmlF === ''),
      'html filter=' + htmlF);
 
+  // ── case 3e: "this element only" must beat a (0,4,1) site rule ──────────
+  // The scope used to emit `sel{…}` at the selector's own weight, so a site
+  // rule with more classes won even with !important — the picker wrote a rule,
+  // showed a colour, and nothing on screen moved.
+  function pickElementOnly(el) {
+    T.capture(el);
+    const sc = sr.getElementById('scope');
+    sc.value = '__this';
+    sc.dispatchEvent(new Event('change'));
+    const nobg = sr.getElementById('nobg');
+    nobg.checked = true;                       // text only, no background
+    nobg.dispatchEvent(new Event('change'));
+    const t = sr.getElementById('txt');
+    t.value = '#00ffff';
+    t.dispatchEvent(new Event('input'));
+    return T.state().css;
+  }
+  const spec2 = document.querySelector('p.spec2');
+  const css2e = pickElementOnly(spec2);
+  const got2 = getComputedStyle(spec2).color;
+  const want2 = inverted ? 'rgb(255, 0, 0)' : 'rgb(0, 255, 255)';
+  const sc2 = sr.getElementById('scope');
+  const sheet = document.getElementById('dm-tuner-rules');
+  const selList = sheet && sheet.sheet ? [...sheet.sheet.cssRules].map((r) => r.selectorText || ('@' + r.type)).join(' | ') : 'NO SHEET';
+  ok('element-only outranks a (0,4,1) site rule', got2 === want2,
+     'computed=' + got2 + ' want=' + want2 +
+     ' matchesBoost=' + spec2.matches('p.spec2:is(p.spec2):is(p.spec2)') +
+     ' sheetRules=' + selList.slice(0, 200));
+
+  // ── case 3f: element-only must move -webkit-text-fill-color ink ─────────
+  const aFF = document.querySelector('p.aFF');
+  pickElementOnly(aFF);
+  const fs = getComputedStyle(aFF);
+  const fill2 = fs.getPropertyValue('-webkit-text-fill-color') || fs.webkitTextFillColor;
+  const wantF = inverted ? 'rgb(255, 0, 0)' : 'rgb(0, 255, 255)';
+  ok('element-only writes -webkit-text-fill-color', fill2 === wantF,
+     'fill=' + fill2 + ' want=' + wantF);
+
   // ── leave the probe painted so the screenshot can sample real pixels ─────
   // (each capture() replaces `pending`, so the last one wins the stylesheet)
   T.capture(probe);
@@ -214,6 +252,11 @@ PAGE = """<!doctype html>
   /* a site rule with a specificity that beats a plain attribute selector:
      (0,4,1) vs (0,1,0). The user's colour must still win. */
   .wrap .deep p.spec1:nth-of-type(1) {{ color: #003366 !important; }}
+  /* the same trap for "this element only": the scope rule used to be emitted at
+     the selector's own weight and lost to this */
+  .wrap2 .deep2 p.spec2:nth-of-type(1) {{ color: #003366 !important; }}
+  /* ink the site paints with -webkit-text-fill-color, picked as ONE element */
+  .aFF {{ color: #003366; -webkit-text-fill-color: #663300; }}
   [data-cr-bgphoto="1"] {{ background-image: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg=="); }}
 </style>
 </head>
@@ -224,6 +267,8 @@ PAGE = """<!doctype html>
 <p class="withsup">with unit <sup id="child">2</sup></p>
 <p class="aF">fill painted text</p>
 <div class="wrap"><div class="deep"><p class="spec1">specificity hostage</p></div></div>
+<div class="wrap2"><div class="deep2"><p class="spec2">element-only hostage</p></div></div>
+<p class="aFF">fill painted, one element</p>
 <div data-cr-bgphoto="1"><span id="inside" class="inside">restored subtree</span></div>
 <script>
   window.chrome = {{ storage: {{ sync: {{ get: function (k, cb) {{ cb && cb({{}}); }},

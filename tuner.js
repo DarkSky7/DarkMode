@@ -135,9 +135,41 @@
         const color = r.color ? (odd ? complementCss(r.color) : r.color) : '';
         const bg = r.bg ? (odd ? complementCss(r.bg) : r.bg) : '';
         const parts = [];
-        if (color) parts.push('color:' + color + ' !important');
+        if (color) {
+          parts.push('color:' + color + ' !important');
+          /* The tone rules have emitted this since 1.0.17; the single-element
+             rules did not, so an element whose ink the SITE painted with
+             -webkit-text-fill-color kept its colour no matter what was picked —
+             `color` does not move text-fill-color ink. Same fix, same reason. */
+          parts.push('-webkit-text-fill-color:' + color + ' !important');
+        }
         if (bg) parts.push('background-color:' + bg + ' !important');
-        return parts.length ? r.sel + '{' + parts.join(';') + '}' : '';
+        if (!parts.length) return '';
+        /* Specificity, for "this element only" (2026-11-16).
+           This branch used to emit `sel{…}` at the selector's own weight, so any
+           site rule with a heavier selector beat it even with !important — and
+           every big site ships one (AliExpress order rows: `.order-item .title`
+           class chains, cards nested four deep). Result: the rule was written,
+           the panel showed a colour, and NOTHING on screen changed. That is the
+           "selecting a single element isn't helping" report.
+           `x:is(x):is(x)` multiplies specificity by three while matching exactly
+           the same elements (an element matches :is(x) iff it matches x), which
+           is the cheapest way to outrank a site without changing the blast
+           radius. EIGHT copies, not three: specificity is compared field by
+           field, so `p.spec2` (0,1,1) repeated three times is (0,3,3) and still
+           LOSES to a site rule like `.wrap2 .deep2 p.spec2:nth-of-type(1)` at
+           (0,4,1) — class count decides. Measured 2026-11-16: the three-copy
+           version left the element exactly the site's colour. Eight copies
+           match the (0,8,0) the tone rules already reach by repeating their
+           attribute. */
+        let sel = r.sel;
+        if (sel.indexOf('::') === -1) {          // :is() around a pseudo-element is invalid
+          try {
+            document.querySelector(sel);         // throws on a malformed selector
+            sel = sel + (':is(' + sel + ')').repeat(7);
+          } catch (e) { /* leave the rule exactly as written */ }
+        }
+        return sel + '{' + parts.join(';') + '}';
       })
       .filter(Boolean)
       .join('\n');
