@@ -14,10 +14,14 @@
   const out = [];
   const ok = (name, cond, detail) =>
     out.push((cond ? 'PASS ' : 'FAIL ') + name + (detail ? ' :: ' + String(detail) : ''));
+  /* Hop OUT of shadow roots: parentElement is null inside one, so a naive walk
+     reports depth 0 -- which reads as "restored" when the truth is "unmeasurable". */
   const depth = (el) => {
-    let n = 0, x = el;
-    while (x && x.nodeType === 1) {
+    let n = 0, x = el, guard = 0;
+    while (x && x.nodeType === 1 && guard++ < 80) {
       if (/invert\(\s*(?:1|100%)\s*\)/.test(getComputedStyle(x).filter || '')) n++;
+      const r = x.getRootNode && x.getRootNode();
+      if (r && r.host) { x = r.host; continue; }
       x = x.parentElement;
     }
     return n;
@@ -64,6 +68,34 @@
   const flat = document.getElementById('flatbg');
   ok('an 80x80 FLAT plate is still left inverted (icon, not photo)', depth(flat) % 2 === 1,
      'depth=' + depth(flat) + ', data-cr-bgphoto=' + flat.getAttribute('data-cr-bgphoto'));
+
+  /* ── light art cut out of its background (a WORDMARK) ─────────────────────
+     156x40, low saturation, few colour buckets -- the AliExpress header logo.
+     Under the page filter it is a dark smudge; it has to be restored. */
+  const wordmark = document.getElementById('wordmark');
+  ok('a transparent-backed LIGHT wordmark is restored', depth(wordmark) % 2 === 0,
+     'depth=' + depth(wordmark) + ', data-cr-bgphoto=' + wordmark.getAttribute('data-cr-bgphoto'));
+
+  /* ── and the guard that rule must not break ───────────────────────────────
+     An OPAQUE shaded disc (the Ambient Weather white-dial bug) has coverage
+     1.0, so it is never "light art": restoring it would put a white disc on a
+     dark dashboard. Tone alone must not earn a restore. */
+  const disc = document.getElementById('disc');
+  ok('an opaque white/grey disc is still left inverted (dial case)', depth(disc) % 2 === 1,
+     'depth=' + depth(disc) + ', data-cr-bgphoto=' + disc.getAttribute('data-cr-bgphoto'));
+
+  /* ── shadow DOM: page CSS cannot reach inside a shadow root at all ────────
+     Most of the new "order centre" style web apps are built from custom
+     elements, and an <img> inside one inherits the page filter while NONE of
+     content.css applies to it. Measure it rather than assume. */
+  const host = document.getElementById('shadowhost');
+  const inner = host && host.shadowRoot && host.shadowRoot.querySelector('img');
+  if (inner) {
+    ok('an <img> inside a shadow root is re-inverted', depth(inner) % 2 === 0,
+       'depth=' + depth(inner) + ' (1 = still a negative: content.css cannot reach shadow DOM)');
+  } else {
+    ok('shadow fixture present', false, 'no shadowRoot/img');
+  }
 
   return out;
 })();

@@ -36,6 +36,7 @@
   const MEDIA_TAGS = /^(IMG|VIDEO|CANVAS|SVG|PICTURE|IFRAME|OBJECT|EMBED)$/;
   const repaintStarted = { done: false };
   const bgPhotoStarted = { done: false };
+  const shadowMedia = { done: false };
 
   /* ── REPAINT LIST — sites where the invert is the WRONG TOOL but the site
      also has no dark theme of its own (2026-11-05) ──────────────────────────
@@ -60,6 +61,7 @@
     document.documentElement.classList.add(OWN_KEY);
     if (ENGINE === 'repaint') startSurfaceRepaint();
     else startBgPhotoFix();
+    startShadowMediaFix();    // media inside shadow roots: page CSS cannot reach it
   }
   function revert() {
     document.documentElement.classList.remove(OWN_KEY);
@@ -548,6 +550,98 @@
 
      Gradients are skipped entirely: we cannot restore a gradient's colours
      individually, and inverting the element would drag its text back to light. */
+  /* ── MEDIA INSIDE SHADOW ROOTS (1.0.25, 2026-11-16) ──────────────────────
+     content.css is a PAGE stylesheet, and a page stylesheet does not apply
+     inside a shadow root. So every <img>, <video> and <canvas> inside a web
+     component inherits the page filter and none of our re-inversion: it renders
+     as a photograph negative, and no amount of page-level CSS fixes it.
+
+     Measured with scripts/test-logo-a11y.py: an <img> inside an open shadow
+     root sat at net invert depth 1 while the identical <img> in the light DOM
+     sat at depth 2. This is the one failure class that scales with the site's
+     architecture rather than with any element's own styling — the new AliExpress
+     order centre is a component app, and it is the likeliest explanation for
+     "ALL the product images are inverted" while the search page is fine.
+
+     Fix: adopt the same rules into every OPEN shadow root as a constructable
+     stylesheet. `:host-context(html.cr-dark)` is what makes one rule tree work
+     for every root: it matches the host whenever an ancestor of the host is the
+     darkened <html>, so the sheet stays inert when dark mode is off.
+
+     Closed roots cannot be reached (by design) — those stay inverted, and
+     report()/the popup are where that would have to be surfaced. */
+  const SHADOW_MEDIA_CSS = [
+    ':host-context(html.cr-dark) img,',
+    ':host-context(html.cr-dark) video,',
+    ':host-context(html.cr-dark) canvas,',
+    ':host-context(html.cr-dark) iframe,',
+    ':host-context(html.cr-dark) embed,',
+    ':host-context(html.cr-dark) object,',
+    ':host-context(html.cr-dark) svg image',
+    '{ filter: invert(1) !important; }',
+    /* a restored background photo: the page filter is already cancelled for the
+       subtree, so media must not be inverted a third time. */
+    ':host-context(html.cr-dark) [data-cr-bgphoto="1"] img,',
+    ':host-context(html.cr-dark) [data-cr-bgphoto="1"] video,',
+    ':host-context(html.cr-dark) [data-cr-bgphoto="1"] canvas,',
+    ':host-context(html.cr-dark) [data-cr-bgphoto="1"] svg image',
+    '{ filter: none !important; }'
+  ].join(String.fromCharCode(10));
+
+  function startShadowMediaFix() {
+    if (shadowMedia.done) return;
+    shadowMedia.done = true;
+    let sheet = null;
+    try {
+      sheet = new CSSStyleSheet();
+      sheet.replaceSync(SHADOW_MEDIA_CSS);
+    } catch (e) {
+      return;                       // no constructable stylesheets: leave as-is
+    }
+    const seen = new WeakSet();
+
+    function adopt(root) {
+      if (!root || seen.has(root)) return;
+      seen.add(root);
+      try {
+        const cur = root.adoptedStyleSheets || [];
+        if (cur.indexOf(sheet) === -1) root.adoptedStyleSheets = cur.concat([sheet]);
+      } catch (e) {}
+    }
+
+    function walk(node, depth) {
+      if (!node || depth > 12 || !node.querySelectorAll) return;
+      const els = node.querySelectorAll('*');
+      for (let i = 0; i < els.length; i++) {
+        const el = els[i];
+        if (el.shadowRoot) {
+          adopt(el.shadowRoot);
+          walk(el.shadowRoot, depth + 1);      // components nest
+        }
+      }
+    }
+
+    let armed = false;
+    function schedule() {
+      if (armed || !isDark()) return;
+      armed = true;
+      setTimeout(function () {
+        armed = false;
+        try { walk(document, 0); } catch (e) {}
+      }, 300);
+    }
+
+    try {
+      const mo = new MutationObserver(schedule);
+      mo.observe(document.documentElement, { childList: true, subtree: true });
+      /* attachShadow() on an ALREADY-inserted element fires no mutation, so the
+         timer ladder matters as much as the observer. It is cheap: `walk` only
+         reads shadowRoot and stops there. */
+      [400, 1200, 3000, 6000, 12000, 24000].forEach(function (t) { setTimeout(schedule, t); });
+      schedule();
+    } catch (e) {}
+  }
+
   function startBgPhotoFix() {
     if (bgPhotoStarted.done) return;
     bgPhotoStarted.done = true;
@@ -586,7 +680,7 @@
           const cx = new OffscreenCanvas(W, H).getContext('2d', { willReadFrequently: true });
           cx.drawImage(bm, 0, 0, W, H);
           const d = cx.getImageData(0, 0, W, H).data;
-          let sat = 0, n = 0, minL = 1, maxL = 0;
+          let sat = 0, n = 0, minL = 1, maxL = 0, sumL = 0;
           const buckets = new Set();
           for (let i = 0; i < d.length; i += 4) {
             if (d[i + 3] < 40) continue;
@@ -601,13 +695,37 @@
             const l = 0.2126 * r + 0.7152 * g + 0.0722 * bl;
             if (l < minL) minL = l;
             if (l > maxL) maxL = l;
+            sumL += l;
             n++;
           }
           if (bm.close) bm.close();
           const s = n ? sat / n : 0;
           const distinct = buckets.size;
           const spread = n ? maxL - minL : 0;
-          return { sat: s, distinct: distinct, spread: spread,
+          const meanL = n ? sumL / n : 0;
+          const coverage = n / (W * H);          // opaque fraction of the sample
+          /* Two different things are worth restoring, and size cannot tell
+             either of them from UI furniture:
+
+             PHOTO     many colours, wide tonal range -- a product shot.
+             LIGHT ART coverage well under 1 (it was cut out of its background),
+                       mostly light ink, with real tonal structure -- a WORDMARK.
+                       The AliExpress header logo is exactly this: 156x40,
+                       saturation 0.085, 6 colour buckets, spread 0.685, and it
+                       renders as a dark smudge under the page filter. A white
+                       dial disc (the Ambient Weather bug) is OPAQUE, so coverage
+                       1.0 keeps it out; a dark glyph stays out on tone. */
+          /* Cut out of its background (coverage < 1) and mostly light ink. Under
+             the page filter that ink turns dark and disappears into the dark
+             page, so it must be given back its colours. Two guards keep the
+             dial lesson: an OPAQUE plate has coverage 1.0 and never qualifies,
+             and a dark glyph (meanL low) is left to invert, which is what makes
+             it readable. No distinct/spread requirement here on purpose -- a
+             pure white glyph on transparency has spread 0 and still needs
+             restoring. */
+          const lightArt = coverage >= 0.08 && coverage <= 0.85 && meanL >= 0.5;
+          return { sat: s, distinct: distinct, spread: spread, meanL: meanL,
+                   coverage: coverage, lightArt: lightArt,
                    photo: s >= 0.12 && distinct >= 24 && spread >= 0.16 };
         })
         .catch(function (e) {
@@ -617,6 +735,8 @@
       bgStats.set(url, p);
       return p;
     }
+    /* read-only handle for scripts/probe-bg-skipped.js: same cache, same maths. */
+    try { window.__crImgStats = imageColourfulness; } catch (e) {}
 
     function isVectorArt(bgImage) {
       if (/data:image\/svg\+xml/i.test(bgImage)) return true;
@@ -726,6 +846,7 @@
     /* Exposed so scripts/diag-images.js and the test harness can ask the engine's
        own question instead of re-deriving it. */
     try { window.__crShowsText = showsText; } catch (e) {}
+    try { window.__crIsVectorArt = isVectorArt; } catch (e) {}
 
     function pass() {
       if (!isDark()) return;
@@ -758,8 +879,16 @@
         if (!m) continue;
         (function (node, url) {
           imageColourfulness(url).then(function (st) {
-            if (!st || st.sat < 0.12) return;               // flat plate / unmeasurable
-            if (box.width * box.height < 10000 && !st.photo) return;   // small + not photographic
+            if (!st) return;                                // unmeasurable -> warn, stay inverted
+            /* Three ways to earn a restore, and the sat-only rule that used to
+               be the whole test still covers the large case it was written for:
+                 photo      colourful raster of any size  (product shots)
+                 lightArt   cut-out light artwork         (wordmarks, logos)
+                 sat>=0.12  the original large-element test, unchanged
+               Anything else -- a flat plate, a dark glyph, an opaque disc -- is
+               UI furniture and inverting it is what the page filter is for. */
+            const big = box.width * box.height >= 10000;
+            if (!st.photo && !st.lightArt && !(big && st.sat >= 0.12)) return;
             if (!isDark()) return;
             if (getComputedStyle(node).backgroundImage === 'none') return;
             node.dataset.crBgphoto = '1';

@@ -65,6 +65,52 @@ def png_b64(w=24, h=24, flat=False):
     return base64.b64encode(png).decode()
 
 
+def rgba_png(w, h, pixel):
+    """Colour type 6: `pixel(x, y) -> (r, g, b, a)`."""
+    zero = bytes([0])
+    rows = b""
+    for y in range(h):
+        rows += zero
+        for x in range(w):
+            rows += bytes(pixel(x, y))
+    def chunk(tag, data):
+        return (struct.pack(">I", len(data)) + tag + data +
+                struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF))
+    ihdr = struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0)
+    magic = bytes([137]) + b"PNG" + bytes([13, 10, 26, 10])
+    png = (magic + chunk(b"IHDR", ihdr) +
+           chunk(b"IDAT", zlib.compress(rows, 9)) + chunk(b"IEND", b""))
+    return base64.b64encode(png).decode()
+
+
+def wordmark_png(w=160, h=40):
+    """A light wordmark cut out of a transparent background -- the AliExpress
+    header logo: low saturation, few colour buckets, wide tonal range, coverage
+    well under 1. Must be restored or it renders as a dark smudge."""
+    def px(x, y):
+        if 6 <= y <= 34 and (6 <= x <= 26 or 32 <= x <= 52 or 58 <= x <= 70 or
+                             76 <= x <= 96 or 102 <= x <= 118):
+            return (245, 245, 245, 255)          # white glyph stems
+        if 6 <= y <= 12 and 124 <= x <= 152:
+            return (214, 178, 90, 255)           # gold accent
+        return (0, 0, 0, 0)                      # transparent
+    return rgba_png(w, h, px)
+
+
+def disc_png(w=110, h=110):
+    """An OPAQUE shaded disc -- the Ambient Weather white-dial bug. Coverage 1.0
+    and therefore never 'light art', whatever its tone."""
+    cx, cy, r = w / 2.0, h / 2.0, w / 2.0 - 2
+    def px(x, y):
+        d = ((x - cx) ** 2 + (y - cy) ** 2) ** 0.5
+        if d > r:
+            return (255, 255, 255, 255)
+        t = d / r
+        v = int(255 - 70 * t)                    # white centre, grey rim
+        return (v, v, v, 255)
+    return rgba_png(w, h, px)
+
+
 PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>logo</title><style>
   body {{ margin: 0; font: 16px/1.4 sans-serif; background: #fff; color: #111; }}
   .logo {{ display: block; width: 200px; height: 120px; background-color: #fff;
@@ -77,6 +123,12 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>logo</title><s
               background-image: url("data:image/png;base64,{img}");
               background-size: contain; background-repeat: no-repeat; }}
   .flat {{ background-image: url("data:image/png;base64,{img2}"); }}
+  .wordmark {{ width: 160px; height: 40px; margin-top: 20px;
+               background-image: url("data:image/png;base64,{img3}");
+               background-size: contain; background-repeat: no-repeat; }}
+  .disc {{ width: 110px; height: 110px; margin-top: 20px;
+           background-image: url("data:image/png;base64,{img4}");
+           background-size: contain; background-repeat: no-repeat; }}
   #visible span {{ font-size: 16px; color: #111; }}
 </style></head><body>
 <a class="logo" id="a11y" href="#"><span class="sr">AliExpress</span></a>
@@ -84,7 +136,20 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>logo</title><s
 <img class="logo" id="plainimg" alt="" src="data:image/png;base64,{img}">
 <div class="smallbg" id="smallbg"></div>
 <div class="smallbg flat" id="flatbg"></div>
+<div class="wordmark" id="wordmark"></div>
+<div class="disc" id="disc"></div>
+<div id="shadowhost"></div>
 <p>Filler paragraph so the palette sampler has ordinary body text to read.</p>
+<script>
+  (function () {{
+    var host = document.getElementById("shadowhost");
+    var root = host.attachShadow({{ mode: "open" }});
+    var im = document.createElement("img");
+    im.src = document.getElementById("plainimg").src;
+    im.style.cssText = "width:120px;height:120px;display:block";
+    root.appendChild(im);
+  }})();
+</script>
 </body></html>"""
 
 STUB = """(function(){
@@ -115,7 +180,8 @@ def main():
         return 0
     os.makedirs(WORK, exist_ok=True)
     with open(os.path.join(WORK, "logo.html"), "w", encoding="utf-8") as fh:
-        fh.write(PAGE.format(img=png_b64(), img2=png_b64(flat=True)))
+        fh.write(PAGE.format(img=png_b64(), img2=png_b64(flat=True),
+                        img3=wordmark_png(), img4=disc_png()))
     stub = os.path.join(WORK, "stub.js")
     with open(stub, "w", encoding="utf-8") as fh:
         fh.write(STUB)
