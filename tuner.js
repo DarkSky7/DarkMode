@@ -197,6 +197,7 @@
     // anything the observer sees appear later.
     syncUiFilter();
     sweepTone();
+    capSurfaces();          // brightness ceiling for fills (1.0.32)
     ensureObserve();
   }
 
@@ -822,6 +823,95 @@
   }
   /** Does this ink need the accent? Grey, or louder than the accent itself. */
   function inkNeedsAccent(hex) { return inkIsLight(hex) || inkIsGlare(hex); }
+
+  /* ══════════════ THE BRIGHTNESS CEILING (1.0.32) ══════════════════════════
+     Mike: "*changing the color to anything specific isn't the objective; the goal
+     is taming brightness -- dark theme and tolerably bright colors*". So the
+     target is a CEILING, not a palette: anything painted brighter than the
+     ceiling gets dimmed IN PLACE, hue preserved, instead of being repainted with
+     one chosen colour.
+
+     Measured on the AliExpress cart before this existed: the Checkout button's
+     fill renders #2cfce3 at L 0.76 -- on a page whose own background is L 0.005,
+     a single 332x44 rectangle that bright is the brightest thing in view. Ink was
+     already handled; surfaces were not.
+
+     Two pieces matter:
+       dimToLum()  -- binary-search a scale factor that lands the colour on the
+                      ceiling, so the hue survives (dimming toward grey or toward
+                      a fixed accent is what we were doing before, and it throws
+                      away the site's own colour language).
+       labels      -- black text on a bright fill becomes black-on-dark once the
+                      fill is dimmed, i.e. invisible. Any label whose contrast
+                      against the NEW fill drops under 4.5:1 is lifted to a light
+                      ink, written with the right invert parity. */
+  const SURFACE_CAP = 0.30;          // rendered-luminance ceiling for painted fills
+  const SURFACE_MIN_AREA = 1200;     // px^2: chips and 1px rules are not glare
+  const SURFACE_ATTR = 'data-dm-cap';
+  const CAP_LABEL_INK = [207, 216, 220];
+
+  function dimToLum(c, capL) {
+    let lo = 0, hi = 1;
+    for (let i = 0; i < 20; i++) {
+      const mid = (lo + hi) / 2;
+      const l = lum([c[0] * mid, c[1] * mid, c[2] * mid]);
+      if (l > capL) hi = mid; else lo = mid;
+    }
+    return (lo + hi) / 2;
+  }
+  function rgbCss(c) { return 'rgb(' + c.map(function (v) { return Math.round(Math.max(0, Math.min(255, v))); }).join(',') + ')'; }
+  function contrastOf(a, b) {
+    const la = lum(a), lb = lum(b);
+    return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
+  }
+
+  /** Dim one element's own fill if it is brighter than the ceiling. */
+  function capSurface(el) {
+    if (!el || el.nodeType !== 1) return false;
+    if (el.id === ROOT_ID || el === document.documentElement || el === document.body) return false;
+    let cs, bg, rect;
+    try { cs = getComputedStyle(el); bg = parseRGB(cs.backgroundColor); rect = el.getBoundingClientRect(); } catch (e) { return false; }
+    if (!bg || bg[3] < 0.5) return false;
+    if (rect.width * rect.height < SURFACE_MIN_AREA) return false;
+    const par = invertDepth(el) % 2;
+    const shown = par ? [255 - bg[0], 255 - bg[1], 255 - bg[2]] : [bg[0], bg[1], bg[2]];
+    if (lum(shown) <= SURFACE_CAP) return false;
+
+    const k = dimToLum(shown, SURFACE_CAP);
+    const target = shown.map(function (v) { return v * k; });
+    const write = par ? target.map(function (v) { return 255 - v; }) : target;
+    try { el.style.setProperty('background-color', rgbCss(write), 'important'); } catch (e) { return false; }
+    el.setAttribute(SURFACE_ATTR, '1');
+
+    /* its own labels: keep them readable against the dimmed fill */
+    for (let i = 0; i < el.querySelectorAll('*').length && i < 60; i++) {
+      const t = el.querySelectorAll('*')[i];
+      if (!ownsText(t)) continue;
+      let tcs, tc;
+      try { tcs = getComputedStyle(t); tc = parseRGB(tcs.webkitTextFillColor || tcs.color); } catch (e) { continue; }
+      if (!tc || tc[3] < 0.05) continue;
+      const tp = invertDepth(t) % 2;
+      const inkShown = tp ? [255 - tc[0], 255 - tc[1], 255 - tc[2]] : [tc[0], tc[1], tc[2]];
+      if (contrastOf(inkShown, target) >= 4.5) continue;
+      const want = tp ? [255 - CAP_LABEL_INK[0], 255 - CAP_LABEL_INK[1], 255 - CAP_LABEL_INK[2]] : CAP_LABEL_INK;
+      try {
+        t.style.setProperty('color', rgbCss(want), 'important');
+        t.style.setProperty('-webkit-text-fill-color', rgbCss(want), 'important');
+        t.style.setProperty('fill', rgbCss(want), 'important');
+      } catch (e) {}
+    }
+    return true;
+  }
+
+  /** Sweep fills for brightness. Bounded like the tone sweep. */
+  function capSurfaces(scope) {
+    const start = scope || document.body;
+    if (!start || start.nodeType !== 1) return 0;
+    const all = [start].concat(Array.prototype.slice.call(start.querySelectorAll('*'), 0, 6000));
+    let n = 0;
+    for (let i = 0; i < all.length; i++) { if (capSurface(all[i])) n++; }
+    return n;
+  }
   function isGradientText(el) {
     const cs = getComputedStyle(el);
     const clip = cs.webkitBackgroundClip || cs.backgroundClip || '';
@@ -1049,6 +1139,7 @@
       const roots = pendingRoots;
       pendingRoots = [];
       for (let i = 0; i < roots.length; i++) sweepTone(roots[i]);
+      capSurfaces();        // late-rendered fills (the Checkout button renders late)
     }, 120);
   }
 
