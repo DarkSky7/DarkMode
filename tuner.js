@@ -868,6 +868,10 @@
   const VIVID_SURFACE_SAT = 0.35;
   const SURFACE_MIN_AREA = 400;
   const PHOTO_OVERLAY = 0.18;        // 1.0.35: uniform trim for url() photo panels      // px^2: lowered in 1.0.34 -- sale badges are ~600px^2 and glare like anything else
+  /* Wide, shallow image panels are promotional strips, not product shots: the red
+     11.11 field is one AVIF. Decoration can take a heavy trim without losing
+     meaning, and a promo banner is exactly the thing that glares. (2026-11-16) */
+  const PHOTO_OVERLAY_PROMO = 0.55;
   const SURFACE_ATTR = 'data-dm-cap';
   const SURFACE_CAPT_ATTR = 'data-dm-capt';   // the seen fill we capped to, for re-labelling
   const CAP_LABEL_INK = [207, 216, 220];
@@ -1028,10 +1032,34 @@
       const write = par ? target.map(function (v) { return 255 - v; }) : target;
       try { el.style.setProperty('background-color', rgbCss(write), 'important'); } catch (e) { return false; }
     } else {
-      const a = PHOTO_OVERLAY;
-      try { el.style.setProperty('box-shadow', 'inset 0 0 0 9999px rgba(0,0,0,' + a + ')', 'important'); }
+      /* PROMO STRIPS ARE IMAGE PANELS (2026-11-16). The red "11.11 Sale" strip is
+         not a painted fill at all: it is span.group-top-notice-container with
+         background-image: url(...avif) -- the red field AND the wordmark are one
+         graphic. It fell into this branch, which painted BLACK at 0.18. Under the
+         page's invert(1) that makes an image LIGHTER, not darker: for a red pixel
+         seen = 255 - 0.82*raw, so a saturated red stays a bright cyan. Same
+         polarity bug as the gradient branch, same fix -- white overlay when the
+         context is inverted.
+
+         The alpha also has to be strong enough to matter. A white overlay of alpha
+         a multiplies the SEEN colour by (1-a) exactly, so 0.18 could never pull a
+         loud banner down. Product thumbnails want a gentle trim (they are photos,
+         and washing them out hides the product); a wide, shallow banner is
+         decoration, so it gets the heavy one. Aspect ratio separates the two
+         without guessing at class names. */
+      const aspect = rect.height > 0 ? rect.width / rect.height : 0;
+      const promo = aspect >= 4 && rect.width * rect.height >= 15000;
+      const a = promo ? PHOTO_OVERLAY_PROMO : PHOTO_OVERLAY;
+      const OL = par ? 255 : 0;
+      try { el.style.setProperty('box-shadow', 'inset 0 0 0 9999px rgba(' + OL + ',' + OL + ',' + OL + ',' + a + ')', 'important'); }
       catch (e) { return false; }
-      target = [20, 20, 20];
+      /* A blind image panel has no colour we can read, so the reference for label
+         scoring is the BRIGHTEST the panel can be after the trim: every channel is
+         multiplied by (1-a) by the overlay, whether the overlay is white under
+         inversion or black without it. Using that worst case means the label is
+         scored against the lightest fill it could actually sit on. */
+      const ceil = Math.round(255 * (1 - a));
+      target = [ceil, ceil, ceil];
     }
     el.setAttribute(SURFACE_ATTR, '1');
     /* remember the fill we landed on, so the label pass can be re-run later */
