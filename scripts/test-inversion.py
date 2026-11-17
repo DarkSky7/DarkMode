@@ -105,9 +105,13 @@ TEST_JS = r"""
   }
 
   // ── case 3: the knob's seed (1.0.27) ────────────────────────────────────
-  // A near-white capture seeds CYAN -- "replace this white with a colour" is the
-  // common job, and seeding the white that is already there makes the first
+  // A near-white capture seeds the DEFAULT INK -- "replace this white with a colour"
+  // is the common job, and seeding the white that is already there makes the first
   // attempt a no-op. Darker ink keeps its own colour so a nudge stays a nudge.
+  // The default moved from #00ffff to #3e738b in 1.0.29 at Mike's request ("dim the
+  // default cyan closer to the colours used in this conversation", then "maybe just
+  // bold?"), so this assertion now checks the colour the product actually ships
+  // rather than the vivid cyan it used to.
   // Built so it RENDERS near-white on both harness pages: computed #333333 is
   // complemented to #cccccc on the inverted page, and #e6e6e6 is already light
   // on the plain one. (.aX cannot be reused here -- it renders dark on the plain
@@ -118,7 +122,7 @@ TEST_JS = r"""
   document.body.appendChild(white);
   T.capture(white);
   const seeded = T.state().pending.color;
-  ok('a near-white capture seeds the cyan default', seeded === '#00ffff', seeded);
+  ok('a near-white capture seeds the default ink', seeded === '#3e738b', seeded);
 
   const accent = document.createElement('p');
   accent.textContent = 'accent probe';
@@ -409,12 +413,17 @@ def main():
         with open(shot, "rb") as fh:
             w, h, rows, bpp = decode_png(fh.read())
         px = pixel(rows, bpp, 120, 120)
-        want = (0, 255, 255)
-        close = all(abs(a - b) <= 4 for a, b in zip(px, want))
-        px_line = ("%s probe pixel rgb%s %s cyan" %
-                   ("PASS" if close else "FAIL", px, "~=" if close else "!="))
+        # The probe's fill is intent #00ffff. Since 1.0.32 a vivid fill is capped to
+        # a rendered-luminance ceiling of 0.16, so pure cyan is NOT what should be
+        # on screen any more -- dimToLum(#00ffff, 0.16) lands on rgb(0,124,124).
+        # This assertion used to demand (0,255,255), which made a working brightness
+        # cap look like a pixel failure.
+        want = (0, 124, 124)
+        close = all(abs(a - b) <= 6 for a, b in zip(px, want))
+        px_line = ("%s probe pixel rgb%s %s capped cyan rgb%s" %
+                   ("PASS" if close else "FAIL", px, "~=" if close else "!=", want))
         results.append(("inverted.html pixel", [("PASS" if close else "FAIL",
-                                                 "probe renders rgb%s (intent #00ffff)" % (px,))]))
+                                                 "probe renders rgb%s (capped from #00ffff)" % (px,))]))
 
     fails = 0
     for name, got in results:

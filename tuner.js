@@ -196,6 +196,17 @@
     // immediately has a rule to attach to. Sweep after writing, then re-sweep
     // anything the observer sees appear later.
     syncUiFilter();
+    /* WHICH CODE IS ACTUALLY RUNNING (2026-11-16). Unpacked content scripts are
+       read from disk once, at extension load, so an edited tuner.js keeps running
+       the OLD build until the extension itself is reloaded -- not the page. That
+       produced two rounds of "the fix did nothing" that were really "the fix was
+       never loaded". Stamp the running manifest version into the page so the live
+       code can be identified by asking, instead of inferred from behaviour. */
+    try {
+      const mv = (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.getManifest)
+        ? chrome.runtime.getManifest().version : 'unknown';
+      document.documentElement.setAttribute('data-dm-ver', mv);
+    } catch (e) {}
     sweepTone();
     capSurfaces();          // brightness ceiling for fills (1.0.32)
     ensureObserve();
@@ -858,7 +869,18 @@
   const SURFACE_MIN_AREA = 400;
   const PHOTO_OVERLAY = 0.18;        // 1.0.35: uniform trim for url() photo panels      // px^2: lowered in 1.0.34 -- sale badges are ~600px^2 and glare like anything else
   const SURFACE_ATTR = 'data-dm-cap';
+  const SURFACE_CAPT_ATTR = 'data-dm-capt';   // the seen fill we capped to, for re-labelling
   const CAP_LABEL_INK = [207, 216, 220];
+  /* A BRIGHTER CANDIDATE IS NEEDED (2026-11-16). Dimming a fill to L 0.16 drops
+     BLACK ink to ~4.2:1 and the pale grey above to ~3.4:1 -- a dead zone where
+     neither offered ink clears AA, so the label pass correctly concluded it had
+     nothing better and left black text on a dark teal button at 4.22:1 (measured
+     on the order page's "Confirm received"). Pure white scores 4.98 on the same
+     fill; this candidate keeps a little of the glare reduction while clearing
+     4.5. Candidates are ordered dim-to-bright and the first that PASSES is taken,
+     so a fill that can carry black ink still gets black ink. */
+  const CAP_LABEL_INK_BRIGHT = [244, 247, 250];
+  const LABEL_INKS = [[0, 0, 0], CAP_LABEL_INK, CAP_LABEL_INK_BRIGHT];
 
   function dimToLum(c, capL) {
     let lo = 0, hi = 1;
@@ -866,6 +888,49 @@
       const mid = (lo + hi) / 2;
       const l = lum([c[0] * mid, c[1] * mid, c[2] * mid]);
       if (l > capL) hi = mid; else lo = mid;
+    }
+    return (lo + hi) / 2;
+  }
+  /* SOLVING THE OVERLAY (2026-11-16). Two independent mistakes lived here, and
+     together they are why a "Confirm received" button on the order page rendered
+     as a light-cyan slab with pale text (measured fill #bae2f9, L 0.714) even
+     though the cap was demonstrably running on it.
+
+     1. POLARITY. The overlay was always BLACK. The page is inverted by
+        html{filter:invert(1)}, so darkening the raw fill darkens it BEFORE the
+        inversion, and the inversion flips it straight back to light. The button's
+        orange gradient rgb(255,100,14)->rgb(255,48,0) is what you SEE as cyan;
+        painting black over the orange yields... cyan again, slightly paler. Under
+        an inverted ancestor the overlay must be WHITE, so that raw gets lighter
+        and the inversion renders it darker.
+     2. ARITHMETIC. `a = 1 - cap/Lmax` treats alpha blending as linear in
+        luminance. It is linear in sRGB-encoded VALUES, and luminance is a power
+        curve on top of those, so the result overshoots badly -- it was driving
+        fills far below the ceiling or, with (1), above it.
+
+     So: blend in RAW space, invert, MEASURE luminance, and binary-search the
+     alpha. Same approach as dimToLum, but through the real compositing path. */
+  function solveOverlay(rawStops, capL, par) {
+    const OL = par ? 255 : 0;
+    const seenAt = function (a) {
+      let worst = 0;
+      for (let i = 0; i < rawStops.length; i++) {
+        const c = rawStops[i];
+        const comp = [
+          c[0] * (1 - a) + OL * a,
+          c[1] * (1 - a) + OL * a,
+          c[2] * (1 - a) + OL * a,
+        ];
+        const seen = par ? [255 - comp[0], 255 - comp[1], 255 - comp[2]] : comp;
+        worst = Math.max(worst, lum(seen));
+      }
+      return worst;
+    };
+    if (seenAt(0) <= capL) return 0;
+    let lo = 0, hi = 0.98;
+    for (let i = 0; i < 22; i++) {
+      const mid = (lo + hi) / 2;
+      if (seenAt(mid) > capL) lo = mid; else hi = mid;
     }
     return (lo + hi) / 2;
   }
@@ -900,11 +965,15 @@
        Read the colour stops out of the gradient and dim the whole layer with an
        inset overlay, which keeps the gradient instead of flattening it. */
     const stops = [];
+    /* rawStops keeps the UN-inverted stops: solveOverlay() has to composite in
+       raw space (the overlay is painted before the ancestor inversion flips it),
+       while `stops` stays in seen space for choosing the ceiling tier. */
+    const rawStops = [];
     if (/gradient\(/i.test(bi)) {
       const re = /rgba?\(([^)]+)\)/g; let m;
       while ((m = re.exec(bi))) {
         const c = parseRGB('rgb(' + m[1] + ')');
-        if (c && c[3] > 0.05) stops.push(asShown(c));
+        if (c && c[3] > 0.05) { rawStops.push([c[0], c[1], c[2]]); stops.push(asShown(c)); }
       }
     }
     /* PHOTO BACKDROPS AS background-image (1.0.35). AliExpress cart thumbnails
@@ -919,11 +988,22 @@
 
     let Lmax = flat ? lum(flat) : 0;
     for (let i = 0; i < stops.length; i++) Lmax = Math.max(Lmax, lum(stops[i]));
-    if (Lmax <= 0.02) return false;
+    /* An image URL has no colour stops, so Lmax is 0 for a photo panel -- the
+       gate below then returned false and the photo branch was unreachable
+       (measured: 75 background-image panels on the cart, 0 capped). Only a
+       MEASURED bright fill may be skipped for being dim enough. */
+    const blind = isUrlImage && !flat && !stops.length;
+    if (Lmax <= 0.02 && !blind) return false;
 
-    const rep = flat || stops[0];
+    /* rep must never be undefined: a blind photo panel has neither a flat colour
+       nor gradient stops, and rgbToHexCss(undefined) threw INSIDE the sweep --
+       which aborted the whole cap pass, taking image dimming down with it
+       (measured: caps 0, images dimmed 0 after the 1.0.37 change). Carry a
+       neutral stand-in; the blind branch does not use rep for anything that
+       matters. */
+    const rep = flat || stops[0] || [128, 128, 128];
     const cap = saturation(rgbToHexCss(rep)) > VIVID_SURFACE_SAT ? SURFACE_CAP_VIVID : SURFACE_CAP;
-    if (Lmax <= cap) return false;
+    if (!blind && Lmax <= cap) return false;
 
     let target;
     /* PRECEDENCE: gradient, then flat, then photo. A small square icon button
@@ -932,10 +1012,15 @@
        overlay -- so #e6e6e6 came out at L 0.65 and still glared. A flat opaque
        fill can be dimmed precisely, so it gets first refusal after gradients. */
     if (stops.length) {
-      const a = Math.min(0.88, 1 - cap / Lmax);
-      try { el.style.setProperty('box-shadow', 'inset 0 0 0 9999px rgba(0,0,0,' + a.toFixed(3) + ')', 'important'); }
+      const a = solveOverlay(rawStops, cap, par);
+      if (a <= 0.002) return false;            // already at or under the ceiling
+      const OL = par ? 255 : 0;                // white overlay inverts to a dark fill
+      try { el.style.setProperty('box-shadow', 'inset 0 0 0 9999px rgba(' + OL + ',' + OL + ',' + OL + ',' + a.toFixed(3) + ')', 'important'); }
       catch (e) { return false; }
       const ref = stops.reduce(function (p, c) { return lum(c) > lum(p) ? c : p; }, stops[0]);
+      /* seen = seenOrig * (1 - a) for a white overlay under an inversion, which is
+         exactly how the alpha was solved, so this is the fill the label must be
+         scored against. */
       target = ref.map(function (v) { return v * (1 - a); });
     } else if (flat) {
       const k = dimToLum(flat, cap);
@@ -949,17 +1034,37 @@
       target = [20, 20, 20];
     }
     el.setAttribute(SURFACE_ATTR, '1');
+    /* remember the fill we landed on, so the label pass can be re-run later */
+    el.setAttribute(SURFACE_CAPT_ATTR, Math.round(target[0]) + ',' + Math.round(target[1]) + ',' + Math.round(target[2]));
+    applyLabelFix(el, target);
+    return true;
+  }
 
-    /* its own labels: keep them readable against the dimmed fill */
-    for (let i = 0; i < el.querySelectorAll('*').length && i < 60; i++) {
-      const t = el.querySelectorAll('*')[i];
+  /* ITS OWN LABELS, RE-ENTRANTLY (2026-11-16). This used to run once, inline,
+     at the moment the fill was capped -- and that is exactly why the order page's
+     "Confirm received" button stayed unreadable. AliExpress hydrates the button's
+     text into a child <span> AFTER the button has been capped and marked, so the
+     label was not there to score; the surface then carries SURFACE_ATTR and every
+     later pass skips it. Measured after the fill fix: button fill capped to a dark
+     blue, span still raw #ffffff (parity 1 => black on screen) at 3.2:1.
+
+     So the label decision is a separate, idempotent function keyed off the fill we
+     recorded, called at cap time AND on every later sweep. Writing the winner back
+     makes the next call a no-op (contrast is then >= 4.5), so repeated sweeps cost
+     two getComputedStyle reads per label and nothing else. */
+  function applyLabelFix(el, seenFill) {
+    if (!el || !seenFill) return 0;
+    let written = 0;
+    const kids = el.querySelectorAll('*');
+    for (let i = 0; i < kids.length && i < 60; i++) {
+      const t = kids[i];
       if (!ownsText(t)) continue;
       let tcs, tc;
       try { tcs = getComputedStyle(t); tc = parseRGB(tcs.webkitTextFillColor || tcs.color); } catch (e) { continue; }
       if (!tc || tc[3] < 0.05) continue;
       const tp = invertDepth(t) % 2;
       const inkShown = tp ? [255 - tc[0], 255 - tc[1], 255 - tc[2]] : [tc[0], tc[1], tc[2]];
-      const cur = contrastOf(inkShown, target);
+      const cur = contrastOf(inkShown, seenFill);
       if (cur >= 4.5) continue;
       /* WHICH ink, not just "lighter". The first version always lifted the label
          to a light ink when contrast fell under 4.5 -- which is wrong as soon as
@@ -967,18 +1072,45 @@
          pale ink scores 3.4:1, so "fixing" it would have made the label WORSE.
          Score both candidates and take the winner; if neither beats what is
          already there, leave it alone. */
-      const cDark = contrastOf([0, 0, 0], target);
-      const cLight = contrastOf(CAP_LABEL_INK, target);
-      const bestInk = cLight > cDark ? CAP_LABEL_INK : [0, 0, 0];
-      if (Math.max(cDark, cLight) <= cur) continue;
+      const cDark = contrastOf([0, 0, 0], seenFill);
+      const cLight = contrastOf(CAP_LABEL_INK, seenFill);
+      /* first (dimmest) candidate that CLEARS 4.5 wins; otherwise the best score
+         available. Scoring only black-vs-pale left a dead zone around L 0.16-0.30
+         where neither passes and the label stayed unreadable. */
+      let bestInk = null, bestC = -1;
+      for (let k = 0; k < LABEL_INKS.length; k++) {
+        const cc = contrastOf(LABEL_INKS[k], seenFill);
+        if (cc >= 4.5) { bestInk = LABEL_INKS[k]; bestC = cc; break; }
+        if (cc > bestC) { bestC = cc; bestInk = LABEL_INKS[k]; }
+      }
+      if (!bestInk) continue;
+      if (Math.max(cDark, cLight) <= cur + 0.01 && bestC <= cur + 0.01) continue;
       const want = tp ? [255 - bestInk[0], 255 - bestInk[1], 255 - bestInk[2]] : bestInk;
       try {
         t.style.setProperty('color', rgbCss(want), 'important');
         t.style.setProperty('-webkit-text-fill-color', rgbCss(want), 'important');
         t.style.setProperty('fill', rgbCss(want), 'important');
+        written++;
       } catch (e) {}
     }
-    return true;
+    return written;
+  }
+
+  /** Re-check the labels of every surface already capped (late-hydrated text). */
+  function relabelCappedSurfaces() {
+    let marked;
+    try { marked = document.querySelectorAll('[' + SURFACE_ATTR + ']'); } catch (e) { return 0; }
+    let n = 0;
+    for (let i = 0; i < marked.length && i < 500; i++) {
+      const raw = marked[i].getAttribute(SURFACE_CAPT_ATTR);
+      if (!raw) continue;
+      const p = raw.split(',');
+      if (p.length !== 3) continue;
+      const fill = [Number(p[0]), Number(p[1]), Number(p[2])];
+      if (fill.some(function (v) { return !isFinite(v); })) continue;
+      try { n += applyLabelFix(marked[i], fill); } catch (e) {}
+    }
+    return n;
   }
 
   /* PHOTO BACKDROPS (1.0.34). Mike: "*maybe also dim the white background in
@@ -1018,8 +1150,16 @@
     if (!start || start.nodeType !== 1) return 0;
     const all = [start].concat(Array.prototype.slice.call(start.querySelectorAll('*'), 0, 6000));
     let n = 0;
-    for (let i = 0; i < all.length; i++) { if (capSurface(all[i])) n++; }
+    /* ONE BAD ELEMENT MUST NOT KILL THE PASS. capSurface touches live computed
+       styles and inline style writes on arbitrary third-party markup; a single
+       throw used to abort every remaining element silently. */
+    for (let i = 0; i < all.length; i++) {
+      try { if (capSurface(all[i])) n++; } catch (e) {}
+    }
     n += dimPhotos(start);
+    /* late-hydrated labels: button text frequently arrives AFTER its fill was
+       capped, so re-score them on every sweep (idempotent, see applyLabelFix) */
+    try { n += relabelCappedSurfaces(); } catch (e) {}
     return n;
   }
   function isGradientText(el) {
