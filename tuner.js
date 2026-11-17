@@ -846,6 +846,15 @@
                       against the NEW fill drops under 4.5:1 is lifted to a light
                       ink, written with the right invert parity. */
   const SURFACE_CAP = 0.30;          // rendered-luminance ceiling for painted fills
+  /* CHROMATIC FILLS GET A LOWER CEILING (2026-11-16). Mike, after the first
+     cap: "*I'd further darken the background of the checkout button and the
+     11.11 Sale*". Both are saturated fills, and saturation is what makes a fill
+     read as loud at the same luminance -- a mid-teal button shouts where a grey
+     of identical L is quiet. So the ceiling is tiered on chroma rather than
+     lowered globally, which keeps neutral cards and page surfaces where they
+     are: #1da796 (L 0.30) is the checkout at the old cap, and it goes to 0.16. */
+  const SURFACE_CAP_VIVID = 0.16;
+  const VIVID_SURFACE_SAT = 0.35;
   const SURFACE_MIN_AREA = 1200;     // px^2: chips and 1px rules are not glare
   const SURFACE_ATTR = 'data-dm-cap';
   const CAP_LABEL_INK = [207, 216, 220];
@@ -858,6 +867,10 @@
       if (l > capL) hi = mid; else lo = mid;
     }
     return (lo + hi) / 2;
+  }
+  function rgbToHexCss(c) {
+    const h = function (v) { return Math.round(Math.max(0, Math.min(255, v))).toString(16).padStart(2, '0'); };
+    return '#' + h(c[0]) + h(c[1]) + h(c[2]);
   }
   function rgbCss(c) { return 'rgb(' + c.map(function (v) { return Math.round(Math.max(0, Math.min(255, v))); }).join(',') + ')'; }
   function contrastOf(a, b) {
@@ -875,9 +888,11 @@
     if (rect.width * rect.height < SURFACE_MIN_AREA) return false;
     const par = invertDepth(el) % 2;
     const shown = par ? [255 - bg[0], 255 - bg[1], 255 - bg[2]] : [bg[0], bg[1], bg[2]];
-    if (lum(shown) <= SURFACE_CAP) return false;
+    const satS = saturation(rgbToHexCss(shown));
+    const cap = satS > VIVID_SURFACE_SAT ? SURFACE_CAP_VIVID : SURFACE_CAP;
+    if (lum(shown) <= cap) return false;
 
-    const k = dimToLum(shown, SURFACE_CAP);
+    const k = dimToLum(shown, cap);
     const target = shown.map(function (v) { return v * k; });
     const write = par ? target.map(function (v) { return 255 - v; }) : target;
     try { el.style.setProperty('background-color', rgbCss(write), 'important'); } catch (e) { return false; }
@@ -892,8 +907,19 @@
       if (!tc || tc[3] < 0.05) continue;
       const tp = invertDepth(t) % 2;
       const inkShown = tp ? [255 - tc[0], 255 - tc[1], 255 - tc[2]] : [tc[0], tc[1], tc[2]];
-      if (contrastOf(inkShown, target) >= 4.5) continue;
-      const want = tp ? [255 - CAP_LABEL_INK[0], 255 - CAP_LABEL_INK[1], 255 - CAP_LABEL_INK[2]] : CAP_LABEL_INK;
+      const cur = contrastOf(inkShown, target);
+      if (cur >= 4.5) continue;
+      /* WHICH ink, not just "lighter". The first version always lifted the label
+         to a light ink when contrast fell under 4.5 -- which is wrong as soon as
+         the fill is dimmed hard: on a target of L 0.16 black scores 4.2:1 and the
+         pale ink scores 3.4:1, so "fixing" it would have made the label WORSE.
+         Score both candidates and take the winner; if neither beats what is
+         already there, leave it alone. */
+      const cDark = contrastOf([0, 0, 0], target);
+      const cLight = contrastOf(CAP_LABEL_INK, target);
+      const bestInk = cLight > cDark ? CAP_LABEL_INK : [0, 0, 0];
+      if (Math.max(cDark, cLight) <= cur) continue;
+      const want = tp ? [255 - bestInk[0], 255 - bestInk[1], 255 - bestInk[2]] : bestInk;
       try {
         t.style.setProperty('color', rgbCss(want), 'important');
         t.style.setProperty('-webkit-text-fill-color', rgbCss(want), 'important');
