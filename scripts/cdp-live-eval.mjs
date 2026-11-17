@@ -27,13 +27,20 @@ const MATCH = opt('match');
 const PROBE = opt('probe');
 const ISOLATED = argv.includes('--isolated');
 const EXTENSION = argv.includes('--extension');
-if (!MATCH || !PROBE) {
-  console.error('need --match <url substring> and --probe <file>');
+if ((!MATCH && !opt('id')) || !PROBE) {
+  console.error('need --probe <file> and either --match <url substring> or --id <targetId>');
   process.exit(2);
 }
 
 const list = await (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json();
-const target = list.find((t) => t.type === 'page' && (t.url || '').includes(MATCH));
+/* --id picks ONE tab exactly. Several tabs can share a URL substring (three cart
+   tabs were open at once during this work), and probing "whichever matched
+   first" means measuring a different document than the one the user is looking
+   at while claiming it is theirs. */
+const ONLY = opt('id');
+const target = ONLY
+  ? list.find((t) => t.id === ONLY)
+  : list.find((t) => t.type === 'page' && (t.url || '').includes(MATCH));
 if (!target) {
   console.error('no page target matching ' + MATCH);
   console.error('pages: ' + list.filter((t) => t.type === 'page').length);

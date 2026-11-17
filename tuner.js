@@ -855,7 +855,8 @@
      are: #1da796 (L 0.30) is the checkout at the old cap, and it goes to 0.16. */
   const SURFACE_CAP_VIVID = 0.16;
   const VIVID_SURFACE_SAT = 0.35;
-  const SURFACE_MIN_AREA = 1200;     // px^2: chips and 1px rules are not glare
+  const SURFACE_MIN_AREA = 400;
+  const PHOTO_OVERLAY = 0.18;        // 1.0.35: uniform trim for url() photo panels      // px^2: lowered in 1.0.34 -- sale badges are ~600px^2 and glare like anything else
   const SURFACE_ATTR = 'data-dm-cap';
   const CAP_LABEL_INK = [207, 216, 220];
 
@@ -882,20 +883,71 @@
   function capSurface(el) {
     if (!el || el.nodeType !== 1) return false;
     if (el.id === ROOT_ID || el === document.documentElement || el === document.body) return false;
-    let cs, bg, rect;
-    try { cs = getComputedStyle(el); bg = parseRGB(cs.backgroundColor); rect = el.getBoundingClientRect(); } catch (e) { return false; }
-    if (!bg || bg[3] < 0.5) return false;
+    let cs, bg, rect, bi;
+    try {
+      cs = getComputedStyle(el); bg = parseRGB(cs.backgroundColor);
+      bi = cs.backgroundImage || ''; rect = el.getBoundingClientRect();
+    } catch (e) { return false; }
     if (rect.width * rect.height < SURFACE_MIN_AREA) return false;
     const par = invertDepth(el) % 2;
-    const shown = par ? [255 - bg[0], 255 - bg[1], 255 - bg[2]] : [bg[0], bg[1], bg[2]];
-    const satS = saturation(rgbToHexCss(shown));
-    const cap = satS > VIVID_SURFACE_SAT ? SURFACE_CAP_VIVID : SURFACE_CAP;
-    if (lum(shown) <= cap) return false;
+    const asShown = function (c) { return par ? [255 - c[0], 255 - c[1], 255 - c[2]] : [c[0], c[1], c[2]]; };
 
-    const k = dimToLum(shown, cap);
-    const target = shown.map(function (v) { return v * k; });
-    const write = par ? target.map(function (v) { return 255 - v; }) : target;
-    try { el.style.setProperty('background-color', rgbCss(write), 'important'); } catch (e) { return false; }
+    const flat = bg && bg[3] > 0.5 ? asShown(bg) : null;
+    /* GRADIENTS ARE PAINTS TOO (1.0.34). The cap only understood
+       background-color, so a surface whose colour arrives as a
+       linear-gradient(...) was invisible to it -- which is how a bright red sale
+       strip survives a cap that is demonstrably working on the button beside it.
+       Read the colour stops out of the gradient and dim the whole layer with an
+       inset overlay, which keeps the gradient instead of flattening it. */
+    const stops = [];
+    if (/gradient\(/i.test(bi)) {
+      const re = /rgba?\(([^)]+)\)/g; let m;
+      while ((m = re.exec(bi))) {
+        const c = parseRGB('rgb(' + m[1] + ')');
+        if (c && c[3] > 0.05) stops.push(asShown(c));
+      }
+    }
+    /* PHOTO BACKDROPS AS background-image (1.0.35). AliExpress cart thumbnails
+       are not <img> elements -- they are background-image url(...) panels, so the
+       img filter in dimPhotos() reached exactly one of them. An image URL has no
+       colour stops to read, so brightness cannot be computed: apply a fixed
+       overlay instead. That is what "dim the white background in product images"
+       means in practice -- the sweep behind the product is what glares, and a
+       uniform trim costs nothing but a little punch. */
+    const isUrlImage = /url\(/i.test(bi);
+    if (!flat && !stops.length && !isUrlImage) return false;
+
+    let Lmax = flat ? lum(flat) : 0;
+    for (let i = 0; i < stops.length; i++) Lmax = Math.max(Lmax, lum(stops[i]));
+    if (Lmax <= 0.02) return false;
+
+    const rep = flat || stops[0];
+    const cap = saturation(rgbToHexCss(rep)) > VIVID_SURFACE_SAT ? SURFACE_CAP_VIVID : SURFACE_CAP;
+    if (Lmax <= cap) return false;
+
+    let target;
+    /* PRECEDENCE: gradient, then flat, then photo. A small square icon button
+       carries BOTH a white background-color and a background-image url; testing
+       the url first sent it down the photo path, where the only tool is an 18%
+       overlay -- so #e6e6e6 came out at L 0.65 and still glared. A flat opaque
+       fill can be dimmed precisely, so it gets first refusal after gradients. */
+    if (stops.length) {
+      const a = Math.min(0.88, 1 - cap / Lmax);
+      try { el.style.setProperty('box-shadow', 'inset 0 0 0 9999px rgba(0,0,0,' + a.toFixed(3) + ')', 'important'); }
+      catch (e) { return false; }
+      const ref = stops.reduce(function (p, c) { return lum(c) > lum(p) ? c : p; }, stops[0]);
+      target = ref.map(function (v) { return v * (1 - a); });
+    } else if (flat) {
+      const k = dimToLum(flat, cap);
+      target = flat.map(function (v) { return v * k; });
+      const write = par ? target.map(function (v) { return 255 - v; }) : target;
+      try { el.style.setProperty('background-color', rgbCss(write), 'important'); } catch (e) { return false; }
+    } else {
+      const a = PHOTO_OVERLAY;
+      try { el.style.setProperty('box-shadow', 'inset 0 0 0 9999px rgba(0,0,0,' + a + ')', 'important'); }
+      catch (e) { return false; }
+      target = [20, 20, 20];
+    }
     el.setAttribute(SURFACE_ATTR, '1');
 
     /* its own labels: keep them readable against the dimmed fill */
@@ -929,6 +981,37 @@
     return true;
   }
 
+  /* PHOTO BACKDROPS (1.0.34). Mike: "*maybe also dim the white background in
+     product images*". A product shot on a white sweep is a 2,500px+ panel of
+     L 1.0 on a page whose own background is L 0.005 -- the last genuinely
+     glaring thing once the fills are capped. The photo must keep its colours, so
+     this appends a uniform brightness trim to whatever filter the restore pass
+     already applied (the counter-invert), never a hue change. */
+  const IMG_DIM = 0.82;
+  const IMG_MIN_AREA = 2500;
+  const IMG_ATTR = 'data-dm-imgdim';
+  function dimPhotos(scope) {
+    const start = scope || document.body;
+    if (!start || start.nodeType !== 1) return 0;
+    const imgs = start.querySelectorAll('img');
+    let n = 0;
+    for (let i = 0; i < imgs.length && i < 400; i++) {
+      const img = imgs[i];
+      if (img.getAttribute(IMG_ATTR)) continue;
+      const r = img.getBoundingClientRect();
+      if (r.width * r.height < IMG_MIN_AREA) continue;
+      let f = 'none';
+      try { f = getComputedStyle(img).filter || 'none'; } catch (e) { continue; }
+      const next = (f === 'none' ? '' : f + ' ') + 'brightness(' + IMG_DIM + ')';
+      try {
+        img.style.setProperty('filter', next, 'important');
+        img.setAttribute(IMG_ATTR, '1');
+        n++;
+      } catch (e) {}
+    }
+    return n;
+  }
+
   /** Sweep fills for brightness. Bounded like the tone sweep. */
   function capSurfaces(scope) {
     const start = scope || document.body;
@@ -936,6 +1019,7 @@
     const all = [start].concat(Array.prototype.slice.call(start.querySelectorAll('*'), 0, 6000));
     let n = 0;
     for (let i = 0; i < all.length; i++) { if (capSurface(all[i])) n++; }
+    n += dimPhotos(start);
     return n;
   }
   function isGradientText(el) {
