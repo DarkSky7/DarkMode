@@ -11,7 +11,7 @@ Prints one MSYS-style path per line (ready for cp in bash). Exits 1 if none.
 MSYS NOTES (cost an hour if forgotten):
   * this runs under WINDOWS python, so an argument like /c/Users/... is not a
     valid path — it must be converted to C:\\Users\\... before open().
-  * $HOME in this shell is the Hermes profile home, not the user profile, so
+  * $HOME in this shell is the Hermes profile home, not the user profile, so  # no-home-ok
     ~ expansion is wrong here. USERPROFILE is the trustworthy base.
 """
 import glob
@@ -67,7 +67,9 @@ def dirs_from_prefs(prefs_path):
 
 
 def default_profiles():
-    base = os.environ.get("USERPROFILE") or os.path.expanduser("~")
+    # Explicit account dir, never ~/USERPROFILE: HOME is the migrated profile here
+    # (see Meta/README.md "Local paths" rule).
+    base = os.environ.get("FLEET_USERPROFILE", r"C:\Users\Mike2")
     roots = [os.path.join(base, BRAVE_REL)] + CHROMIUM_ROOTS
     out = []
     for root in roots:

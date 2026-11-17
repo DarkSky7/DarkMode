@@ -44,7 +44,7 @@ GUID = "darkmode@landis.cc"
 SLUG = "darkmode-for-resistant-sites"
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DIST = os.path.join(ROOT, "dist")
-ENV_PATH = os.path.expanduser("~/.ssh/amo-darkmode.env")
+ENV_PATH = os.environ.get('AMO_ENV') or 'C:/Users/Mike2/.ssh/amo-darkmode.env'
 
 PROFILE_GLOBS = [
     os.path.expandvars(r"%APPDATA%\Mozilla\Firefox\Profiles\*"),

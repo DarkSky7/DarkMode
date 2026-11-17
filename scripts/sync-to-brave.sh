@@ -20,8 +20,9 @@
 set -euo pipefail
 SRC="$(cd "$(dirname "$0")/.." && pwd)"
 
-# USER is not exported in this MSYS shell under `set -u`; derive it.
-PROFILE_USER="${USER:-${USERNAME:-$(basename "$HOME")}}"
+# USER is not exported in this MSYS shell under `set -u`, and basename "$HOME" is
+# wrong here (HOME = the migrated D:/Users/Mike profile). State the account dir.
+PROFILE_USER="${PROFILE_USER:-Mike2}"
 PROFILES=(
   "/c/Users/$PROFILE_USER/AppData/Local/BraveSoftware/Brave-Browser/User Data/Default"
 )
