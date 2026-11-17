@@ -11,6 +11,12 @@
  * Returned residual is the number that has to be zero (logo/branding excepted).
  */
 (() => {
+  /* Must match DEFAULT_INK in tuner.js. Two failures here on 2026-11-16, both
+     the same trap: the target colour was HARDCODED cyan (so every element
+     painted the new default counted as a residual), and the patch that was
+     supposed to add this const silently matched nothing, leaving `TARGET is not
+     defined` and a verify that would never have run. Const defined first. */
+  const TARGET = [0x3e, 0x73, 0x8b];
   const parse = (s) => {
     if (!s) return null;
     if (s === 'transparent') return [0, 0, 0, 0];
@@ -89,7 +95,7 @@
        painted cyan came back as "still light" -- 373 of 373 on a page that was
        visibly all cyan. Judging "still white or grey" is a different question
        from deciding what to tag: it is neutrality plus luminance, full stop. */
-    if (Math.abs(shown[0] - 0) < 16 && Math.abs(shown[1] - 255) < 16 && Math.abs(shown[2] - 255) < 16) { painted++; continue; }
+    if (Math.abs(shown[0] - TARGET[0]) < 20 && Math.abs(shown[1] - TARGET[1]) < 20 && Math.abs(shown[2] - TARGET[2]) < 20) { painted++; continue; }
     /* "Still white or grey" == light AND unsaturated. The first version used a
        channel-spread test and thus blessed the 87 warm greys (#9f9b8d) that are
        exactly the defect being hunted. */

@@ -13,7 +13,7 @@
  * existing light rule instead of appending a second one.
  */
 (async () => {
-  const DEFAULT_COLOR = '#00ffff';
+  const DEFAULT_COLOR = '#3e738b';   // must match DEFAULT_INK in tuner.js
   const MIN = 0.15;
   const host = location.host.replace(/^www\./, '');
 

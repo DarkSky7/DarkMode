@@ -107,7 +107,16 @@
               // themes (quantamagazine: 26 elements).
               parts.push('-webkit-text-fill-color:' + conv(r.color) + ' !important');
             }
-            if (r.bg) parts.push('background-color:' + conv(r.bg) + ' !important');
+            /* BOLD INSTEAD OF BRIGHT (2026-11-16). Mike: "*dim the default cyan
+               closer to the colors used in this conversation*", then of the first
+               dim attempt: "*the more greenish hue is still kind of bright*", then
+               "*maybe just bold?*". That is the right instinct: at #3e738b the ink
+               is 3.80:1 on a near-black page -- fine for a word, tiring to hunt for
+               at 400 weight. Stem weight buys the legibility that brightness was
+               being spent on, so the page stops glowing. Applies to the LIGHT rule
+               only: an explicit colour pick is the user matching something on the
+               page, and silently thickening it would change a design they chose. */
+            if (r.match === 'light') parts.push('font-weight:' + LIGHT_WEIGHT + ' !important');
             /* Specificity by repetition. A site (or a rule saved by an older
                version of this extension) can carry a selector like
                `.post__content > div > … > p:nth-of-type(7)` at (0,5,6), which
@@ -501,7 +510,7 @@
        can ever be complete on a page that keeps repainting values from an API.
        One threshold covers all of them, now and after the next render. */
     let lightTotal = 0, lightColours = 0;
-    lastGroups.forEach((g, h) => { if (inkIsLight(h)) { lightTotal += g.n; lightColours++; } });
+    lastGroups.forEach((g, h) => { if (inkNeedsAccent(h)) { lightTotal += g.n; lightColours++; } });
     if (lightTotal >= 2) {
       scopeSel.appendChild(mk('option', {
         value: '__light',
@@ -542,7 +551,7 @@
        sweep uses -- so the knob can never "replace" an element with the colour
        it is already showing, and a mid-grey click offers cyan like a white one
        does. */
-    const seed = inkIsLight(mine) ? DEFAULT_INK : mine;
+    const seed = inkNeedsAccent(mine) ? DEFAULT_INK : mine;
     txtInput.value = seed;
     shadow.getElementById('txthex').textContent =
       seed === mine ? mine : mine + '  →  ' + seed;
@@ -774,7 +783,21 @@
      which makes "replace this white with a colour" a no-op until you notice the
      swatch. Near-white ink therefore seeds CYAN; anything else keeps its own
      colour, so nudging an accent stays a nudge. */
-  const DEFAULT_INK = '#00ffff';
+  /* #4a7f9e, not #00ffff and not the first attempt (2026-11-16). Bright cyan at
+     15.79:1 on a near-black page is exhausting for a whole page of text; Mike
+     asked for the blue-cyan his own UI uses for code and links, then said the
+     first replacement still read "greenish and kind of bright". The accent in
+     his screenshot measures hue ~198 deg, mean #3e738b (3.80:1 against #0a0a0a),
+     so: keep the hue family, ROTATE IT BLUER to drop the green cast, and land on
+     the AA floor rather than above it --
+       #00ffff  hue 180  light 0.50  contrast 15.79   (original)
+       #4d9cb2  hue 193  light 0.50  contrast  6.33   (too green, too bright)
+       #4a7f9e  hue 202  light 0.45  contrast  4.54   (this)
+     One constant to move in either direction. */
+  const DEFAULT_INK = '#3e738b';
+  /* 600, not 700: enough stem to read dim ink on black, not so much that every
+     label screams. */
+  const LIGHT_WEIGHT = 600;
   function inkIsLight(hex) {
     const c = parseRGB(hex);
     if (!c) return false;
@@ -783,6 +806,22 @@
        yellow price tag cyan -- not what "white and grey" means. */
     return lum(c) >= LIGHT_MIN && inkIsNeutral(hex);
   }
+  /* GLARE, NOT ONLY GREY (1.0.31, 2026-11-16). Mike: "*the item prices are still
+     a little bright, color is fine*". The cart's prices render #2cfce3 -- vivid
+     teal, L 0.76, weight 700 -- and the neutrality rule skips saturated ink BY
+     DESIGN, so the single loudest thing on the page was the one thing the sweep
+     refused to touch. Same reasoning as grey, applied to chroma: ink that
+     carries real colour AND clears the dim accent by this much is glare, and
+     gets the same ink. Badges at L 0.43-0.44 ("Sale -9% now", "Free shipping")
+     fall in with it; genuinely dark accents (< 0.30) keep their hue. */
+  const VIVID_CAP = 0.30;
+  function inkIsGlare(hex) {
+    const c = parseRGB(hex);
+    if (!c) return false;
+    return lum(c) >= VIVID_CAP && saturation(hex) > NEUTRAL_SAT;
+  }
+  /** Does this ink need the accent? Grey, or louder than the accent itself. */
+  function inkNeedsAccent(hex) { return inkIsLight(hex) || inkIsGlare(hex); }
   function isGradientText(el) {
     const cs = getComputedStyle(el);
     const clip = cs.webkitBackgroundClip || cs.backgroundClip || '';
@@ -958,7 +997,7 @@
       let hit = null;
       for (let j = rules.length - 1; j >= 0; j--) {
         const r = rules[j];
-        if (r.match === 'color' ? sameHex(r.from, base) : inkIsLight(base)) { hit = r; break; }
+        if (r.match === 'color' ? sameHex(r.from, base) : inkNeedsAccent(base)) { hit = r; break; }
       }
       if (hit) tagged++;
       plan.push([el, hit ? hit.id + (invertDepth(el) % 2 === 1 ? 'o' : 'e') : '']);
@@ -1078,7 +1117,7 @@
         if (isGradientText(el)) gradient++;
         continue;
       }
-      if (!inkIsLight(base)) continue;
+      if (!inkNeedsAccent(base)) continue;
       total++;
       if (el.hasAttribute(TONE_ATTR)) { done++; if (isSvgText(el)) svg++; }
     }
