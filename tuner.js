@@ -208,9 +208,20 @@
       document.documentElement.setAttribute('data-dm-ver', mv);
     } catch (e) {}
     sweepTone();
-    capSurfaces();          // brightness ceiling for fills (1.0.32)
+    if (fillsAllowed()) capSurfaces();   // brightness ceiling for fills (1.0.32)
     ensureObserve();
   }
+
+  /* The bright-fill ceiling and the photo dimmer write INLINE !important values
+     computed from the invert parity they measured — and inside a frame that
+     parity changes the instant startFrameTone() decides to darken it, which
+     turns every one of those writes into its complement (measured 2026-11-21 on
+     the fixture: the drawer's photo came out `brightness(0.82)` with no invert,
+     i.e. a dimmed NEGATIVE, because dimPhotos had marked it before the frame had
+     its class). Frames are served by content.css (media restore) and
+     sweepFrameInk (accent ink) instead, both of which are parity-correct by
+     construction. */
+  function fillsAllowed() { return window.top === window; }
 
   /* ───────────────────────────────────────── colour maths ────────────── */
   function parseRGB(str) {
@@ -708,10 +719,24 @@
   function invertDepth(el) {
     let n = 0;
     let node = el;
-    while (node && node.nodeType === 1) {
+    let doc = el && el.ownerDocument;
+    let guard = 0;
+    while (node && node.nodeType === 1 && guard++ < 256) {
       const f = getComputedStyle(node).filter;
       if (f && f !== 'none' && /invert\(\s*(?:1|100%)\s*\)/.test(f)) n++;
-      node = node.parentElement;
+      if (node.parentElement) { node = node.parentElement; continue; }
+      /* A filter does not stop at a frame boundary (2026-11-21). The page's
+         `html{filter:invert(1)}` paints the iframe's CONTENT, and the iframe
+         element's own filter cancels it — so the parity that decides how ink
+         renders inside a frame is the frame element's chain, not the frame
+         document's (which starts at a parentless <html> and reported 0). Only a
+         same-origin frame can read its container, and that is exactly the case
+         where the ink engine is allowed to judge the frame at all. */
+      let fe = null;
+      try { fe = doc && doc.defaultView ? doc.defaultView.frameElement : null; } catch (e) { fe = null; }
+      if (!fe) break;
+      doc = fe.ownerDocument;
+      node = fe;
     }
     return n;
   }
@@ -742,6 +767,254 @@
   const SVG_NS = 'http://www.w3.org/2000/svg';
   function isSvgText(el) {
     return !!el && el.namespaceURI === SVG_NS && /^text$/i.test(el.tagName);
+  }
+
+  /* ═════════ FRAMES SITTING INSIDE AN INVERTED PAGE (1.0.41, 2026-11-21) ═════
+
+     Mike: *"after adding something to the cart, a right side view of the cart is
+     presented which is not being inverted. It would also be nice if the text was
+     pushed to cyan (instead of white)."*
+
+     The flyout is not a div. It is
+         <iframe id="thd-drawer-frame" src="/cart/atc?…">   499x1519, right edge
+     and content.css re-inverts every iframe (`html.cr-dark iframe{filter:invert(1)}`)
+     so that video and payment embeds stay in true colour. That restore cancelled
+     the page filter for the drawer too. Measured in the user's own tab: the frame
+     crop averaged luminance 0.950 (a white panel beside a 0.043-black page), and
+     the identical crop with filter:none forced on that one frame measured 0.043.
+
+     So each frame now judges ITSELF. This file already runs in every frame
+     (manifest `all_frames: true`), and a same-origin frame can reach its
+     container through window.frameElement — so no cross-document poking and no
+     parent-side scan is needed:
+
+       light frame inside an inverted page -> mark the container
+           data-cr-frame="dark"  (content.css drops the restore: the page filter
+                                  now darkens us), add html.cr-frame-dark (media
+                                  inside the frame is re-inverted back to true
+                                  colour), and tint neutral ink with the accent.
+       dark frame                        -> leave it restored. A dark embedded
+                                            app must not be inverted into a light
+                                            one.
+       cross-origin frame                -> frameElement is null, nothing runs.
+                                            YouTube/payment embeds keep the old,
+                                            correct true-colour behaviour.
+       unmeasurable frame                -> leave the default restore.
+
+     The ink half matters as much as the darkening: with the page filter applied,
+     the drawer's #202020 ink renders white, which is exactly what Mike asked to
+     be cyan. Elements are tagged data-dm-fink and one stylesheet — written in
+     COMPLEMENT space, because the frame's content is still one invert away —
+     paints them with the accent. Same predicate as the rest of the extension
+     (inkNeedsAccent), so saturated ink keeps its meaning. */
+  const FRAME_DARK_CLASS = 'cr-frame-dark';
+  const FINK_ATTR = 'data-dm-fink';
+  const FRAME_MEDIA = /^(IMG|VIDEO|CANVAS|IFRAME|OBJECT|EMBED|SVG|PICTURE|SCRIPT|STYLE|LINK|HEAD|META|NOSCRIPT|TEMPLATE)$/;
+  const FRAME_MIN_AREA = 20000;      // 141x141: below this nobody is reading it
+
+  /* Element -> the ink colour it showed BEFORE we tagged it, so a second sweep
+     judges the site's ink and not our own paint. */
+  const frameBase = new WeakMap();
+
+  function frameContainer() {
+    try { return window.frameElement || null; } catch (e) { return null; }
+  }
+
+  /* Is this frame's own document a LIGHT page? Area-weighted opaque background
+     first — that is what the eye sees behind everything. Frames that paint no
+     big plate (a dark app on a transparent canvas) fall back to their ink, where
+     dark type means a light page. null = nothing measurable, decide nothing. */
+  function frameLightness() {
+    const body = document.body;
+    if (!body) return null;
+    const deRect = document.documentElement.getBoundingClientRect();
+    const vp = Math.max(1, (deRect.width || window.innerWidth || 0) * (deRect.height || window.innerHeight || 0));
+    let area = 0, sum = 0;
+    const els = [document.documentElement, body]
+      .concat(Array.prototype.slice.call(body.querySelectorAll('*'), 0, 5000));
+    for (let i = 0; i < els.length; i++) {
+      const el = els[i];
+      if (!el || el.nodeType !== 1 || FRAME_MEDIA.test(el.tagName)) continue;
+      let cs;
+      try { cs = getComputedStyle(el); } catch (e) { continue; }
+      const c = parseRGB(cs.backgroundColor);
+      if (!c || c[3] < 0.5) continue;
+      const r = el.getBoundingClientRect();
+      const a = r.width * r.height;
+      if (a < 2000) continue;
+      area += a;
+      sum += a * lum(c);
+    }
+    if (area >= vp * 0.15) {
+      const mean = sum / area;
+      return { light: mean >= 0.5, by: 'surface', mean: +mean.toFixed(3), cover: +(area / vp).toFixed(2) };
+    }
+    let inkSum = 0, inkN = 0;
+    const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT, null);
+    let node;
+    while ((node = walker.nextNode())) {
+      const t = (node.nodeValue || '').trim();
+      if (!t || !node.parentElement) continue;
+      let cs;
+      try { cs = getComputedStyle(node.parentElement); } catch (e) { continue; }
+      const c = parseRGB(cs.color);
+      if (c && c[3] > 0.3) { inkSum += lum(c); inkN++; }
+      if (inkN >= 400) break;
+    }
+    if (!inkN) return null;
+    const meanInk = inkSum / inkN;
+    return { light: meanInk <= 0.5, by: 'ink', meanInk: +meanInk.toFixed(3), n: inkN };
+  }
+
+  /* Which accent? A tuning rule the user saved for this host wins; otherwise the
+     extension's own ink. Frames are not selectable in the picker, so without
+     this the drawer would be the one place the tuned colour does not reach. */
+  function frameAccentIntent() {
+    const rules = toneRules();
+    for (let i = rules.length - 1; i >= 0; i--) {
+      const r = rules[i];
+      if (r && (r.match === 'light' || r.match === 'color') && r.color) return r.color;
+    }
+    return DEFAULT_INK;
+  }
+
+  function frameInkCss(intent) {
+    const write = complementCss(intent);
+    const one = '[' + FINK_ATTR + ']';
+    const many = one.repeat(8);           // (0,9,0): beats a site's own chain
+    return [
+      ':root ' + many + '{color:' + write + ' !important;' +
+        '-webkit-text-fill-color:' + write + ' !important;' +
+        'font-weight:' + LIGHT_WEIGHT + ' !important}',
+      ':root text' + many + '{fill:' + write + ' !important}',
+      ':root ' + one + ' text' + one.repeat(7) + '{fill:' + write + ' !important}'
+    ].join(String.fromCharCode(10));
+  }
+
+  function frameRuleStyle(on, css) {
+    let st = document.getElementById('dm-frame-rules');
+    if (!on) { if (st && st.parentNode) st.parentNode.removeChild(st); return; }
+    if (!css) return;
+    if (!st) {
+      st = document.createElement('style');
+      st.id = 'dm-frame-rules';
+      (document.head || document.documentElement).appendChild(st);
+    }
+    if (st.textContent !== css) st.textContent = css;
+  }
+
+  function sweepFrameInk(intent) {
+    const body = document.body;
+    if (!body || !intent) return 0;
+    const all = [body].concat(Array.prototype.slice.call(body.querySelectorAll('*'), 0, 8000));
+    const plan = [];
+    for (let i = 0; i < all.length; i++) {
+      const el = all[i];
+      if (el.nodeType !== 1 || !ownsText(el)) continue;
+      /* rendersOf() already answers "what colour does the eye see" and now knows
+         about the frame boundary (invertDepth hops to frameElement), so a
+         drawer's #202020 arrives here as #dfdfdf. */
+      /* A tagged element's live colour is OUR paint, so its decision has to be
+         made against the colour it had before we touched it. Same convention as
+         the tone sweep's toneBase, kept local so the two can never disagree. */
+      const tagged = el.hasAttribute(FINK_ATTR);
+      const rendered = tagged ? (frameBase.get(el) || rendersOf(el)) : rendersOf(el);
+      if (!rendered) continue;
+      plan.push([el, inkNeedsAccent(rendered) ? '1' : '']);
+    }
+    let hits = 0;
+    for (let i = 0; i < plan.length; i++) {
+      const el = plan[i][0], want = plan[i][1];
+      const has = el.getAttribute(FINK_ATTR);
+      if (want) {
+        hits++;
+        if (has !== want) {
+          if (!frameBase.has(el)) frameBase.set(el, rendersOf(el) || '');
+          el.setAttribute(FINK_ATTR, want);
+        }
+      }
+      else if (has) el.removeAttribute(FINK_ATTR);
+    }
+    frameRuleStyle(true, frameInkCss(intent));
+    return hits;
+  }
+
+  function startFrameTone() {
+    if (window.top === window) return;              // top document: the engine's job
+    const fe = frameContainer();
+    if (!fe) return;                                // cross-origin: not ours to judge
+    let state = '';                                 // '', 'dark'
+    let timer = null, lastEvidence = null;
+
+    function pageInverted() {
+      try {
+        return invertDepth(fe.ownerDocument.documentElement) % 2 === 1;
+      } catch (e) { return false; }
+    }
+
+    function clear() {
+      if (state === '') return;
+      state = '';
+      document.documentElement.classList.remove(FRAME_DARK_CLASS);
+      try { if (fe.getAttribute('data-cr-frame') === 'dark') fe.removeAttribute('data-cr-frame'); } catch (e) {}
+      frameRuleStyle(false);
+      const marked = document.querySelectorAll('[' + FINK_ATTR + ']');
+      for (let i = 0; i < marked.length; i++) marked[i].removeAttribute(FINK_ATTR);
+    }
+
+    function step() {
+      if (!document.body) return;
+      if (!pageInverted()) { clear(); return; }
+      /* Once the frame is dark, stop re-deciding it. The measurement is a full
+         DOM walk and the observer re-runs this on every mutation, so paying for
+         it forever is the one way this pass could cost a slow page frames. The
+         ink sweep below is idempotent and cheap, and it is the half that has to
+         keep up with content the drawer streams in. */
+      if (state === 'dark') { sweepFrameInk(frameAccentIntent()); return; }
+      const r = document.documentElement.getBoundingClientRect();
+      const area = (r.width || window.innerWidth || 0) * (r.height || window.innerHeight || 0);
+      if (area < FRAME_MIN_AREA) return;            // too small to matter
+      const m = frameLightness();
+      if (!m) return;                               // unmeasurable: keep the restore
+      if (!m.light) { clear(); return; }            // a dark app in a frame stays true
+      lastEvidence = m;
+      /* Mark the container FIRST: that is what lets the page filter reach us and
+         what changes our parity, and every colour decision below is made in
+         complement space because of it. */
+      if (state !== 'dark') {
+        state = 'dark';
+        try { fe.setAttribute('data-cr-frame', 'dark'); } catch (e) {}
+        document.documentElement.classList.add(FRAME_DARK_CLASS);
+      }
+      sweepFrameInk(frameAccentIntent());
+    }
+
+    function schedule(delay) {
+      if (timer) return;
+      timer = setTimeout(function () { timer = null; try { step(); } catch (e) {} }, delay || 250);
+    }
+
+    /* Three watchers, because the drawer arrives late and can arrive twice:
+       (1) our own DOM fills in after the frame's load event;
+       (2) the HOSTING page may be darkened after us (or lifted again) — that is
+           an attribute change on a document we can read;
+       (3) the ladder covers the case where both are already true before this
+           script ran, which no mutation will ever announce. */
+    try {
+      new MutationObserver(function () { schedule(300); })
+        .observe(document.documentElement, { childList: true, subtree: true });
+    } catch (e) {}
+    try {
+      new MutationObserver(function () { schedule(300); })
+        .observe(fe.ownerDocument.documentElement, { attributes: true, attributeFilter: ['class'] });
+    } catch (e) {}
+    [0, 300, 900, 2000, 4000, 8000, 15000].forEach(function (t) { setTimeout(function () { try { step(); } catch (e) {} }, t); });
+    window.addEventListener('load', function () { schedule(400); });
+
+    window.__dmFrame = {
+      state: function () { return { marked: state, evidence: lastEvidence, parity: invertDepth(document.documentElement) % 2, tagged: document.querySelectorAll('[' + FINK_ATTR + ']').length }; },
+      step: function () { step(); return window.__dmFrame.state(); }
+    };
   }
 
   /* "Light" is the only thing left after an exact colour stops being enough.
@@ -1417,7 +1690,7 @@
       const roots = pendingRoots;
       pendingRoots = [];
       for (let i = 0; i < roots.length; i++) sweepTone(roots[i]);
-      capSurfaces();        // late-rendered fills (the Checkout button renders late)
+      if (fillsAllowed()) capSurfaces();   // late-rendered fills (the Checkout button renders late)
     }, 120);
   }
 
@@ -1730,6 +2003,11 @@
     if (perHost.length) await rememberHost();
     applyRules();
   }).catch(() => {});
+
+  /* Frames are judged on their own evidence, not on storage: the drawer's ink is
+     the accent whether or not this host has a saved rule. Cheap no-op in the top
+     document and in every cross-origin frame. */
+  try { startFrameTone(); } catch (e) {}
 
   // Harness hook: lets a test drive the picker without a real click.
   window.__dmTuner = {

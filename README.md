@@ -38,6 +38,35 @@ are inert without it.
 > 8/10 thumbnails net=3 while the plain-`<img>` logo was correctly net=2).
 > The `img` rule already covers every picture's painted child.
 
+### Iframes: restored by default, darkened when they ARE the page's own UI (1.0.41)
+
+`iframe` is in the exempt list above, which is right for a video player or a
+payment form and wrong for an app that ships its own **light** panel inside a
+frame — the frame then renders light beside a darkened page. Home Depot's
+"Added to Cart" flyout is exactly that (`<iframe id="thd-drawer-frame">`), and it
+measured 0.950 mean luminance beside a 0.043 page.
+
+So a frame is judged by its own pixels. `tuner.js` runs in every frame, and a
+same-origin frame can reach its container via `window.frameElement`:
+
+- **light frame, inverted page** → container gets `data-cr-frame="dark"`
+  (content.css drops the restore so the page filter darkens it), the frame's
+  `<html>` gets `cr-frame-dark` (media inside is re-inverted back to true colour),
+  and its neutral ink is tinted with the accent — the drawer's white text is
+  cyan, not white.
+- **dark frame** → untouched; a dark app must not be inverted into a light one.
+- **cross-origin frame** → `frameElement` is `null`, nothing runs; YouTube and
+  payment embeds keep true colour.
+- **unmeasurable frame** → left restored.
+
+`invertDepth()` hops the frame boundary, because the page's `html` filter paints
+the frame's content and the frame element's own filter cancels it; without the
+hop every colour decision inside a frame would be written un-complemented. The
+bright-fill ceiling and photo dimmer deliberately do **not** run in frames — they
+write inline `!important` values keyed to a parity that flips when a frame is
+darkened (measured: the photo came out `brightness(0.82)` with no invert, i.e. a
+dimmed negative).
+
 Known trade-offs of the filter tactic (accepted for the resistant case):
 - `position: fixed` headers can misbehave (a filter on the root makes them
   behave like their containing block) — cosmetic on most pages.

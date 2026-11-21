@@ -33,6 +33,50 @@ html.cr-dark svg image {
   filter: invert(1) !important;
 }
 
+/* ── FRAMES THE PAGE INVITES INTO ITS OWN THEME (1.0.41, 2026-11-21) ────────
+   An iframe restored by the rule above renders in TRUE colour, which is right
+   for a video embed and wrong for an app that ships its own LIGHT UI inside a
+   frame: the frame then sits un-darkened beside a darkened page.
+
+   Measured on homedepot.com: the "Added to Cart" flyout is not a div, it is
+   <iframe id="thd-drawer-frame" src="/cart/atc?…"> parked on the right edge.
+   Its crop averaged luminance 0.950 next to a 0.043 page; forcing filter:none
+   on that one frame measured 0.043, i.e. the page filter does reach iframe
+   content and this restore was the only thing hiding it.
+
+   tuner.js measures the frame's own document (it runs in every frame) and, when
+   the frame is a light page sitting inside an inverted one, marks its container
+   with data-cr-frame="dark". Specificity (0,2,2) beats the bare rule (0,1,2), so
+   no source-order dependency. Cross-origin frames can never be measured and are
+   never marked, which keeps youtube/payment embeds in true colour. */
+html.cr-dark iframe[data-cr-frame="dark"] {
+  filter: none !important;
+}
+
+/* INSIDE a darkened frame the page filter is one invert away, exactly as in the
+   document, so media must be re-inverted a second time or product photos come
+   out as film negatives (measured on the same drawer: the Apollo fitting photo
+   rendered as a negative while the text was correctly white-on-black).
+   Same list as the document rule above — and again, never `picture`. */
+html.cr-frame-dark img,
+html.cr-frame-dark video,
+html.cr-frame-dark canvas,
+html.cr-frame-dark embed,
+html.cr-frame-dark object,
+html.cr-frame-dark svg image {
+  filter: invert(1) !important;
+}
+
+/* Form fields inside a darkened frame: the UA paints the caret from `color`,
+   and a placeholder would otherwise stay near-black on near-black. The value
+   written is the COMPLEMENT of the intended grey because the frame's content is
+   still one invert away (255-0x8b, 255-0x98, 255-0xa5) — writing #8b98a5 here
+   would render as a warm brown. */
+html.cr-frame-dark ::placeholder {
+  color: #74675a !important;
+  opacity: 1 !important;
+}
+
 /* ── BACKGROUND-IMAGE MEDIA (1.0.10) ─────────────────────────────────────────
    A photo painted as a CSS background-image has no element of its own to
    restore, so the page filter turns it into a negative: on aliexpress.us the
