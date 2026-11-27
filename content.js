@@ -9,7 +9,7 @@
    content.css and do nothing until the class exists. */
 (function () {
   'use strict';
-  const VERSION = '1.0.41';
+  const VERSION = '1.1.0';
   const HOST = location.hostname.replace(/^www\./, '');
 
   if (window.top !== window) return; // frames: parent handles the page
@@ -62,11 +62,16 @@
     if (ENGINE === 'repaint') startSurfaceRepaint();
     else startBgPhotoFix();
     startShadowMediaFix();    // media inside shadow roots: page CSS cannot reach it
+    /* The palette sweep (tuner.js) is gated on this class, so it has to be told
+       when the class appears or disappears — otherwise "darken this page" now
+       darkens but leaves the ink white until the next page load (1.1.0). */
+    try { if (window.__dmResweep) window.__dmResweep(); } catch (e) {}
   }
   function revert() {
     document.documentElement.classList.remove(OWN_KEY);
     // an engine change must not leave the other engine's class behind
     document.documentElement.classList.remove(ENGINE === 'repaint' ? KEY : KEY_REPAINT);
+    try { if (window.__dmResweep) window.__dmResweep(); } catch (e) {}
   }
   function isDark() { return document.documentElement.classList.contains(OWN_KEY); }
 
@@ -935,7 +940,23 @@
 
   /* Is the page ALREADY dark (native dark theme, browser auto-dark, or another
      extension's full invert)?  Inverting a dark page would fake the original
-     light look, so the popup must not offer "darken" for these. */
+     light look, so nothing may darken it.
+
+     TWO HOLES FIXED 2026-11-27, both found by auto-dark becoming the default:
+     they were survivable while every darkening was a deliberate click, and they
+     are not survivable now that every unseen site goes through here.
+
+     (1) `color-scheme: light dark` was not recognised. That is how a modern
+         site says "I have a dark theme, use it if the reader prefers dark", and
+         under a dark OS preference it renders dark. Reading only an exact
+         "dark" reported it as light. example.com is exactly this shape
+         (html{color-scheme:light dark;background:light-dark(#eee,#222)}) and it
+         measured as light while rendering white-on-#222.
+     (2) Our own forced root background (`html.cr-dark{background:#fff}` in
+         content.css) is what the invert paints the canvas from — it is NOT the
+         page's colour. Reading it as "light" made the guard that backs out of a
+         natively-dark page unable to fire, because <html> always measured white
+         once we had applied. It is now inconclusive, and an ink sample decides. */
   function toneNatural(ignoreFilter) {
     try {
       const st = getComputedStyle(document.documentElement);
@@ -944,7 +965,11 @@
         if (/invert\s*\(\s*(?:1|100%)/.test(f)) return 'dark';   // another ext inverted
       }
       const cs = String(st.colorScheme || '').toLowerCase();
-      if (cs === 'dark') return 'dark';
+      let prefersDark = false;
+      try {
+        prefersDark = !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      } catch (e) {}
+      if (cs === 'dark' || (/(^|\s)dark(\s|$)/.test(cs) && prefersDark)) return 'dark';
       if (cs === 'light') return 'light';
       for (let i = 0; i < 2; i++) {
         const el = i === 0 ? document.body : document.documentElement;
@@ -957,12 +982,42 @@
         if (a < 0.5) continue;
         const lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
         if (lum <= 0.28) return 'dark';
-        if (lum >= 0.55) return 'light';
+        if (lum >= 0.55) {
+          if (i === 1 && isDark()) break;   // our own #fff, not the page's
+          return 'light';
+        }
         break; // opaque mid-grey — inconclusive
       }
-      // NOTE: no prefers-color-scheme fallback here — on pages with no opaque
-      // background (e.g. many search homes) it false-positives as dark under a
-      // dark OS preference, wrongly blocking the darken button on light pages.
+      /* INK FALLBACK: white type on an unpainted canvas is a dark theme with no
+         declaration. Sample the SITE's own ink (elements we have already painted
+         carry our tone attribute, so their colour is ours and is skipped). */
+      const body = document.body;
+      if (body) {
+        let sum = 0, n = 0;
+        const els = Array.prototype.slice.call(body.querySelectorAll('*'), 0, 4000);
+        for (let i = 0; i < els.length && n < 300; i++) {
+          const el = els[i];
+          if (el.nodeType !== 1 || el.id === 'dm-tuner-root' || el.hasAttribute('data-dm-tone')) continue;
+          let owns = false;
+          for (let k = el.firstChild; k; k = k.nextSibling) {
+            if (k.nodeType === 3 && k.nodeValue && k.nodeValue.trim()) { owns = true; break; }
+          }
+          if (!owns) continue;
+          let c = null;
+          try { c = getComputedStyle(el); } catch (e) { continue; }
+          const m2 = String(c.webkitTextFillColor || c.color || '').match(/[\d.]+/g);
+          if (!m2 || m2.length < 3) continue;
+          const a2 = m2.length > 3 ? +m2[3] : 1;
+          if (a2 < 0.3) continue;
+          sum += (0.2126 * +m2[0] + 0.7152 * +m2[1] + 0.0722 * +m2[2]) / 255;
+          n++;
+        }
+        if (n >= 8) {
+          const mean = sum / n;
+          if (mean >= 0.55) return 'dark';
+          if (mean <= 0.45) return 'light';
+        }
+      }
       return 'unknown';
     } catch (e) { return 'unknown'; }
   }
@@ -972,11 +1027,34 @@
     try { chrome.runtime.sendMessage({ type: 'dmHostState', host: HOST, dark: isDark() }); } catch (e) {}
   }
 
-  /* remembered sites: apply ASAP (documentElement exists at document_start) */
+  /* ── WHEN IS A PAGE DARKENED? (1.1.0, 2026-11-27) ─────────────────────────
+     Two independent reasons, and the second one is new:
+
+       darkHosts[HOST]      the user remembered this site       → always dark
+       dmAuto !== false     the master switch                   → dark by default
+
+     Mike: "I'd also like it to consider the possibility of automatically going
+     Dark Mode to previously unseen sites by default (violating our claim that it
+     does nothing until asked)". So the claim changes and so does the default:
+     dmAuto is ON unless it is explicitly false.
+
+     dmLightHosts[HOST] is what keeps that usable — the popup switches the
+     current site off for good and auto-dark never touches it again. An explicit
+     darkHosts entry wins over an exclusion (asked for more specifically), and
+     the DENY list above wins over both.
+
+     `autoApplied` is the one bit the guards need: "dark because we guessed",
+     so a page that turns out to have its own dark theme can be handed back
+     without touching a darkening the user asked for. `manualTouch` marks a
+     by-hand toggle and freezes every automatic decision for that tab. */
+  let autoOn = true, lightHosts = {}, remembered = false;
+  let autoApplied = false, manualTouch = false;
   try {
-    chrome.storage.sync.get('darkHosts', (got) => {
-      const hosts = got.darkHosts || {};
-      if (hosts[HOST] || hosts['*']) { apply(); report(); }
+    chrome.storage.sync.get(['darkHosts', 'dmAuto', 'dmLightHosts'], (got) => {
+      remembered = !!((got.darkHosts || {})[HOST] || (got.darkHosts || {})['*']);
+      autoOn = got.dmAuto !== false;
+      lightHosts = got.dmLightHosts || {};
+      if (remembered || (autoOn && !lightHosts[HOST])) { apply(); report(); autoApplied = !remembered; }
     });
   } catch (e) { /* storage unavailable (chrome:// etc.) — stay inert */ }
 
@@ -996,29 +1074,57 @@
     if (ENGINE !== 'repaint') {
       window.addEventListener('load', function () {
         setTimeout(function () {
-          if (isDark() && toneNatural(true) === 'dark') { revert(); report(); }
+          if (isDark() && toneNatural(true) === 'dark') { revert(); report(); autoApplied = false; }
         }, 1200);
+      });
+      /* AUTO-DARK NEEDS A SECOND OPINION, EARLIER (1.1.0). Applying at
+         document_start is what makes the darkening flash-free, but on a page
+         that ships its own dark theme that means up to a second of the wrong
+         look before the guard above fires. DOMContentLoaded is the earliest
+         moment <body> exists with the site's stylesheet normally applied, so a
+         guess (autoApplied) is re-asked there and handed back at once. A
+         darkening the USER asked for is never undone here. */
+      document.addEventListener('DOMContentLoaded', function () {
+        if (!autoApplied || manualTouch) return;
+        setTimeout(function () {
+          if (autoApplied && isDark() && toneNatural(true) === 'dark') {
+            revert(); report(); autoApplied = false;
+          }
+        }, 150);
       });
     }
   } catch (e) {}
 
-  /* remember-toggled while this tab is open: apply if now remembered (never
-     auto-revert a manual darken — that state is the user's call) */
+  /* settings changed while this tab is open. Never auto-revert a manual darken —
+     that state is the user's call — and never fight a by-hand toggle. */
   try {
     chrome.storage.onChanged.addListener((ch, area) => {
-      if (area !== 'sync' || !ch.darkHosts) return;
-      const hosts = (ch.darkHosts.newValue) || {};
-      if ((hosts[HOST] || hosts['*']) && !isDark()) { apply(); report(); }
+      if (area !== 'sync') return;
+      if (ch.darkHosts) remembered = !!((ch.darkHosts.newValue || {})[HOST] || (ch.darkHosts.newValue || {})['*']);
+      if (ch.dmAuto) autoOn = ch.dmAuto.newValue !== false;
+      if (ch.dmLightHosts) lightHosts = ch.dmLightHosts.newValue || {};
+      if (!ch.darkHosts && !ch.dmAuto && !ch.dmLightHosts) return;
+      if (manualTouch) return;
+      const want = remembered || (autoOn && !lightHosts[HOST]);
+      if (want && !isDark() && toneNatural() !== 'dark') { apply(); report(); autoApplied = !remembered; }
+      else if (!want && isDark() && autoApplied) { revert(); report(); autoApplied = false; }
     });
   } catch (e) {}
 
   /* popup asks */
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-    if (msg.type === 'dmGetState') { sendResponse({ dark: isDark(), host: HOST, v: VERSION, tone: toneNatural() }); }
+    if (msg.type === 'dmGetState') {
+      sendResponse({
+        dark: isDark(), host: HOST, v: VERSION, tone: toneNatural(),
+        auto: autoOn, excluded: !!lightHosts[HOST], remembered: remembered,
+        autoApplied: autoApplied
+      });
+    }
     else if (msg.type === 'dmSetDark') {
       if (msg.dark && !msg.force && !isDark() && toneNatural() === 'dark') {
         sendResponse({ dark: false, alreadyDark: true, tone: 'dark' });   // don't flip dark→light-ish
       } else {
+        manualTouch = true; autoApplied = false;
         (msg.dark ? apply : revert)(); report(); sendResponse({ dark: isDark() });
       }
     }
@@ -1026,6 +1132,7 @@
       if (!isDark() && toneNatural() === 'dark') {
         sendResponse({ dark: false, alreadyDark: true, tone: 'dark' });
       } else {
+        manualTouch = true; autoApplied = false;
         isDark() ? revert() : apply(); report(); sendResponse({ dark: isDark() });
       }
     }
@@ -1034,5 +1141,9 @@
   });
 
   /* expose for popup debugging / tests */
-  window.__darkMode = { apply, revert, isDark, tone: toneNatural, host: HOST, version: VERSION };
+  window.__darkMode = {
+    apply, revert, isDark, tone: toneNatural, host: HOST, version: VERSION,
+    auto: () => autoOn, lightHosts: () => lightHosts, remembered: () => remembered,
+    autoApplied: () => autoApplied
+  };
 })();

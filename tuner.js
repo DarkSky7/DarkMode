@@ -21,6 +21,10 @@
 
   const ROOT_ID = 'dm-tuner-root';
   const TONE_ATTR = 'data-dm-tone';
+  /* The id of the master-palette rule. Fixed (not uid()) so that a re-sweep
+     recognises the tags it already wrote instead of re-tagging every element on
+     every pass, and so `clearStaleTones` treats it as live. */
+  const DEF_RULE_ID = 'dmDefInk';
   const sync = (chrome.storage && chrome.storage.sync) || null;
   const host = location.hostname.replace(/^www\./, '');
 
@@ -32,6 +36,36 @@
   let lastGroups = new Map(), lastMine = '', lastKey = '', seq = 0, mo = null, moTimer = null, covTimer = null;
   let ready = null;   // resolves once storage has been read; saves await it
   let pendingRoots = [];
+
+  /* ══════════════ THE PALETTE (1.1.0, 2026-11-27) ══════════════════════════
+     Mike: "convert as much white to cyan as possible … the cyan is just my
+     current preference … the user should retain the ability to set that default
+     override colour … a master override palette and a site-specific override of
+     the override palette, only saving the latter if/when the user needs one to
+     fix the default palette on that site only."
+
+     Three storage keys, and the shape IS the request:
+
+       dmInk       (string)  the MASTER palette's ink. One colour for every site.
+       dmAccent    (bool)    is the master palette applied at all. Default true:
+                             a darkened page whose white/grey ink is untouched was
+                             the single most common complaint about this extension.
+       dmSiteInk   (object)  { host: '#rrggbb' } — the per-site override. Only a
+                             host that has an entry here is ever written to, so a
+                             site override exists only when the user made one.
+
+     Precedence, lowest to highest: master palette -> site palette -> the user's
+     own saved tone/selector rules (which already win by being appended last in
+     toneRules()). Nothing here touches a host that has a saved rule. */
+  const PALETTE_INK_DEFAULT = '#2f9eae';
+  /* The tone rules are painted by a page stylesheet, NOT by content.css, so they
+     are not gated on <html class="cr-dark"> the way the engine rules are. That
+     was survivable while every rule was a deliberate per-host edit; with the
+     master palette DEFAULT-ON it would mean "revert to light" left the page
+     light with cyan text on it. Scope every emitted rule to the same class the
+     engine uses (and to the frame's class, for a frame we darkened). */
+  const DARK_SCOPE = ':root:is(.cr-dark,.cr-frame-dark)';
+  let accentOn = true, masterInk = PALETTE_INK_DEFAULT, siteInk = {};
   /* Baseline per element, WITH the invert parity it was measured at.
      Two bugs live here. (1) After the first sweep the element's own colour IS
      the rule's colour, so a second sweep must compare against the original.
@@ -67,13 +101,33 @@
   }
 
   async function loadRules() {
-    const data = await sget({ tuneRulesByHost: {}, tuneRulesGlobal: [] });
+    const data = await sget({
+      tuneRulesByHost: {}, tuneRulesGlobal: [],
+      dmInk: '', dmAccent: true, dmSiteInk: {}
+    });
     const map = data.tuneRulesByHost || {};
     const fix = (list) => (Array.isArray(list) ? list.map((r) =>
       (r && (r.match === 'color' || r.match === 'light') && !r.id) ? Object.assign({}, r, { id: uid() }) : r) : []);
     perHost = fix(map[host]);
     globalRules = fix(data.tuneRulesGlobal);
+    /* THE MASTER AND SITE PALETTES. A malformed value in storage must never
+       leave the page un-tinted, so anything that is not #rrggbb falls back to
+       the built-in cyan rather than to '' (which cssText would emit as an
+       invalid declaration and the whole sweep would look dead). */
+    masterInk = hexOr(data.dmInk, PALETTE_INK_DEFAULT);
+    accentOn = data.dmAccent !== false;
+    siteInk = (data.dmSiteInk && typeof data.dmSiteInk === 'object' && !Array.isArray(data.dmSiteInk))
+      ? data.dmSiteInk : {};
     return { perHost, globalRules };
+  }
+
+  function hexOr(v, fallback) {
+    return (typeof v === 'string' && /^#[0-9a-f]{6}$/i.test(v.trim())) ? v.trim().toLowerCase() : fallback;
+  }
+
+  /** The ink this host should use: site palette, else master palette. */
+  function paletteInk() {
+    return hexOr(siteInk[host], masterInk);
   }
 
   async function persist() {
@@ -116,7 +170,7 @@
                being spent on, so the page stops glowing. Applies to the LIGHT rule
                only: an explicit colour pick is the user matching something on the
                page, and silently thickening it would change a design they chose. */
-            if (r.match === 'light') parts.push('font-weight:' + LIGHT_WEIGHT + ' !important');
+            if (r.match === 'light' && !r.def) parts.push('font-weight:' + LIGHT_WEIGHT + ' !important');
             /* Specificity by repetition. A site (or a rule saved by an older
                version of this extension) can carry a selector like
                `.post__content > div > … > p:nth-of-type(7)` at (0,5,6), which
@@ -127,14 +181,14 @@
             const attr = '[' + TONE_ATTR + '="' + r.id + suffix + '"]' +
               ('[' + TONE_ATTR + ']').repeat(7);
             const out = [];
-            if (parts.length) out.push(':root ' + attr + '{' + parts.join(';') + '}');
+            if (parts.length) out.push(DARK_SCOPE + ' ' + attr + '{' + parts.join(';') + '}');
             if (r.color) {
               /* SVG text paints with `fill` and ignores `color` outright, so a
                  gauge's own labels would tag and stay the same colour. Scoped
                  to `text` elements ONLY — a descendant `*` fill rule would
                  recolour every icon inside a tagged span. */
-              out.push(':root text' + attr + '{fill:' + conv(r.color) + ' !important}');
-              out.push(':root ' + attr + ' text{fill:' + conv(r.color) + ' !important}');
+              out.push(DARK_SCOPE + ' text' + attr + '{fill:' + conv(r.color) + ' !important}');
+              out.push(DARK_SCOPE + ' ' + attr + ' text{fill:' + conv(r.color) + ' !important}');
             }
             return out.join('\n');
           };
@@ -190,7 +244,12 @@
       styleEl.id = 'dm-tuner-rules';
       (document.head || document.documentElement).appendChild(styleEl);
     }
-    const all = globalRules.concat(perHost).concat(pending ? [pending] : []);
+    /* The master palette travels with the rules (1.1.0). It is NOT a stored
+       rule, so this array — not toneRules(), which drops selector rules — is
+       what the stylesheet must be built from, with the palette rule FIRST so a
+       saved rule always wins the cascade. */
+    const def = defaultRule();
+    const all = (def ? [def] : []).concat(globalRules).concat(perHost).concat(pending ? [pending] : []);
     styleEl.textContent = cssText(all);
     // Tag first? No: the stylesheet must exist before tagging, so the attribute
     // immediately has a rule to attach to. Sweep after writing, then re-sweep
@@ -870,12 +929,13 @@
      extension's own ink. Frames are not selectable in the picker, so without
      this the drawer would be the one place the tuned colour does not reach. */
   function frameAccentIntent() {
+    if (!accentOn) return '';
     const rules = toneRules();
     for (let i = rules.length - 1; i >= 0; i--) {
       const r = rules[i];
       if (r && (r.match === 'light' || r.match === 'color') && r.color) return r.color;
     }
-    return DEFAULT_INK;
+    return paletteInk();
   }
 
   function frameInkCss(intent) {
@@ -905,7 +965,16 @@
 
   function sweepFrameInk(intent) {
     const body = document.body;
-    if (!body || !intent) return 0;
+    if (!body) return 0;
+    /* The master palette can be switched OFF (or a rule list emptied) while the
+       frame is already dark; leaving the old stylesheet up would keep the frame
+       tinted by a colour that no longer exists. */
+    if (!intent) {
+      frameRuleStyle(false);
+      const marked = document.querySelectorAll('[' + FINK_ATTR + ']');
+      for (let i = 0; i < marked.length; i++) marked[i].removeAttribute(FINK_ATTR);
+      return 0;
+    }
     const all = [body].concat(Array.prototype.slice.call(body.querySelectorAll('*'), 0, 8000));
     const plan = [];
     for (let i = 0; i < all.length; i++) {
@@ -1068,18 +1137,21 @@
      which makes "replace this white with a colour" a no-op until you notice the
      swatch. Near-white ink therefore seeds CYAN; anything else keeps its own
      colour, so nudging an accent stays a nudge. */
-  /* #4a7f9e, not #00ffff and not the first attempt (2026-11-16). Bright cyan at
-     15.79:1 on a near-black page is exhausting for a whole page of text; Mike
-     asked for the blue-cyan his own UI uses for code and links, then said the
-     first replacement still read "greenish and kind of bright". The accent in
-     his screenshot measures hue ~198 deg, mean #3e738b (3.80:1 against #0a0a0a),
-     so: keep the hue family, ROTATE IT BLUER to drop the green cast, and land on
-     the AA floor rather than above it --
-       #00ffff  hue 180  light 0.50  contrast 15.79   (original)
-       #4d9cb2  hue 193  light 0.50  contrast  6.33   (too green, too bright)
-       #4a7f9e  hue 202  light 0.45  contrast  4.54   (this)
-     One constant to move in either direction. */
-  const DEFAULT_INK = '#3e738b';
+  /* THE DEFAULT INK IS A CYAN (1.1.0, 2026-11-27). Mike: "there are MANY sites
+     in which I'd like to ensure Dark Mode AND convert as much white to cyan as
+     possible"; cyan is his current preference and the master palette in the
+     popup changes it in one control.
+
+     Why #2f9eae and not #00ffff or the 1.0.x #3e738b:
+
+       #00ffff  hue 180  L 50%  contrast 15.79 on #0a0a0a  (exhausting, rejected)
+       #3e738b  hue 199  L 39%  contrast  3.80  (the old dim blue-cyan)
+       #2f9eae  hue 188  L 43%  contrast  6.24  (this — unmistakably cyan, and
+                                                  past AA without glowing)
+
+     It also no longer needs the 600 weight crutch the dim ink used, so the
+     master rule does NOT force font-weight (see cssText: `r.def`). */
+  const DEFAULT_INK = PALETTE_INK_DEFAULT;
   /* 600, not 700: enough stem to read dim ink on black, not so much that every
      label screams. */
   const LIGHT_WEIGHT = 600;
@@ -1157,7 +1229,18 @@
      4.5. Candidates are ordered dim-to-bright and the first that PASSES is taken,
      so a fill that can carry black ink still gets black ink. */
   const CAP_LABEL_INK_BRIGHT = [244, 247, 250];
-  const LABEL_INKS = [[0, 0, 0], CAP_LABEL_INK, CAP_LABEL_INK_BRIGHT];
+  const LABEL_INKS_BASE = [[0, 0, 0], CAP_LABEL_INK, CAP_LABEL_INK_BRIGHT];
+  /* THE PALETTE IS A LABEL INK TOO (1.1.0). These writes are inline !important,
+     so they beat the accent stylesheet and a capped surface's label stayed
+     PALE — measured on w3.org: 10 of 149 accented elements rendered white for
+     exactly this reason. Offering the palette ink as a candidate lets the
+     contrast score decide, and the score is the only thing allowed to outrank
+     the palette. Black stays first: on a light fill it is still the best label. */
+  function labelInks() {
+    if (!accentOn) return LABEL_INKS_BASE;
+    const c = parseRGB(paletteInk());
+    return c ? [[0, 0, 0], [c[0], c[1], c[2]], CAP_LABEL_INK, CAP_LABEL_INK_BRIGHT] : LABEL_INKS_BASE;
+  }
 
   function dimToLum(c, capL) {
     let lo = 0, hi = 1;
@@ -1379,10 +1462,11 @@
          available. Scoring only black-vs-pale left a dead zone around L 0.16-0.30
          where neither passes and the label stayed unreadable. */
       let bestInk = null, bestC = -1;
-      for (let k = 0; k < LABEL_INKS.length; k++) {
-        const cc = contrastOf(LABEL_INKS[k], seenFill);
-        if (cc >= 4.5) { bestInk = LABEL_INKS[k]; bestC = cc; break; }
-        if (cc > bestC) { bestC = cc; bestInk = LABEL_INKS[k]; }
+      const inks = labelInks();
+      for (let k = 0; k < inks.length; k++) {
+        const cc = contrastOf(inks[k], seenFill);
+        if (cc >= 4.5) { bestInk = inks[k]; bestC = cc; break; }
+        if (cc > bestC) { bestC = cc; bestInk = inks[k]; }
       }
       if (!bestInk) continue;
       if (Math.max(cDark, cLight) <= cur + 0.01 && bestC <= cur + 0.01) continue;
@@ -1589,8 +1673,43 @@
     return false;
   }
 
+  /* THE MASTER PALETTE, AS A RULE (1.1.0). Emitted FIRST so that "last rule
+     wins" in sweepTone gives it the LOWEST precedence — a site palette is just a
+     different colour for this same rule, while a rule the user saved on purpose
+     must always beat it. */
+  function defaultRule() {
+    if (!accentOn) return null;
+    return {
+      id: DEF_RULE_ID, match: 'light', from: '', color: paletteInk(),
+      bg: '', min: LIGHT_MIN, def: true
+    };
+  }
+
+  /* White ink on a LIGHT OR SATURATED PLATE was chosen for contrast: tinting it
+     yields cyan-on-blue and destroys the control. The per-host rules never
+     needed this guard (the user was looking at the element when they made one);
+     a master palette applied to every site does, so `def` rules check it.
+     The plate is judged the way the screen composites it — first opaque ancestor
+     background, complemented for this element's invert parity — and "loud" means
+     rendered luminance above 0.18. No opaque ancestor at all means the page
+     canvas, which under the invert engine is BLACK, so it is not loud. */
+  function plateLoud(el) {
+    let node = el;
+    const parity = invertDepth(el) % 2;
+    while (node && node.nodeType === 1) {
+      const bg = parseRGB(getComputedStyle(node).backgroundColor);
+      if (bg && bg[3] > 0.5) {
+        const shown = parity === 1 ? [255 - bg[0], 255 - bg[1], 255 - bg[2]] : [bg[0], bg[1], bg[2]];
+        return lum(shown) > 0.18;
+      }
+      node = node.parentElement;
+    }
+    return false;
+  }
+
   function toneRules() {
-    return globalRules.concat(perHost).concat(pending ? [pending] : [])
+    const def = defaultRule();
+    return (def ? [def] : []).concat(globalRules).concat(perHost).concat(pending ? [pending] : [])
       .filter((r) => r && r.id && (r.match === 'light' || (r.match === 'color' && r.from)));
   }
 
@@ -1604,6 +1723,16 @@
 
   /** Tag every text-owning element under `scope` whose baseline colour matches. */
   function sweepTone(scope) {
+    /* NOTHING TO PAINT ON A PAGE WE DID NOT DARKEN (1.1.0). The emitted rules
+       are gated on the engine class, so on a light page this would only litter
+       the DOM with attributes that match no rule — measured on afuncan.com
+       (natively dark, auto-dark correctly backs out): 20 tagged elements, 0
+       painted. */
+    const de = document.documentElement;
+    if (de && !de.classList.contains('cr-dark') && !de.classList.contains('cr-frame-dark')) {
+      if (!scope) clearStaleTones(new Set());
+      return 0;
+    }
     const rules = toneRules();
     if (!rules.length) {
       if (!scope) clearStaleTones(new Set());
@@ -1638,7 +1767,12 @@
       let hit = null;
       for (let j = rules.length - 1; j >= 0; j--) {
         const r = rules[j];
-        if (r.match === 'color' ? sameHex(r.from, base) : inkNeedsAccent(base)) { hit = r; break; }
+        if (!(r.match === 'color' ? sameHex(r.from, base) : inkNeedsAccent(base))) continue;
+        /* The master palette is applied to sites nobody inspected, so it carries
+           a guard the user's own rules never needed: ink sitting on a bright or
+           saturated plate keeps its colour (cyan-on-blue kills a button). */
+        if (r.def && plateLoud(el)) continue;
+        hit = r; break;
       }
       if (hit) tagged++;
       plan.push([el, hit ? hit.id + (invertDepth(el) % 2 === 1 ? 'o' : 'e') : '']);
@@ -2009,6 +2143,31 @@
      document and in every cross-origin frame. */
   try { startFrameTone(); } catch (e) {}
 
+  /* PALETTE CHANGES REACH THE OPEN PAGE (1.1.0). The popup writes storage; every
+     tab listens, so "pick a colour" is a live loop rather than save-and-reload.
+     Only the three palette keys are handled here — darkHosts belongs to
+     content.js, which owns the engine class. */
+  try {
+    chrome.storage.onChanged.addListener((ch, area) => {
+      if (area !== 'sync' || (!ch.dmInk && !ch.dmAccent && !ch.dmSiteInk)) return;
+      if (ch.dmInk) masterInk = hexOr(ch.dmInk.newValue, PALETTE_INK_DEFAULT);
+      if (ch.dmAccent) accentOn = ch.dmAccent.newValue !== false;
+      if (ch.dmSiteInk) {
+        siteInk = (ch.dmSiteInk.newValue && typeof ch.dmSiteInk.newValue === 'object'
+          && !Array.isArray(ch.dmSiteInk.newValue)) ? ch.dmSiteInk.newValue : {};
+      }
+      applyRules();
+      if (window.top !== window && document.documentElement.classList.contains(FRAME_DARK_CLASS)) {
+        sweepFrameInk(frameAccentIntent());
+      }
+    });
+  } catch (e) {}
+
+  /* content.js calls this when the engine class changes (1.1.0): the emitted
+     rules and their tags are both produced here, so "darken this page" has to
+     re-run the sweep or the ink stays white until the next load. */
+  window.__dmResweep = function () { try { applyRules(); } catch (e) {} };
+
   // Harness hook: lets a test drive the picker without a real click.
   window.__dmTuner = {
     open: openPanel,
@@ -2018,7 +2177,12 @@
       host: host, perHost: perHost, global: globalRules, pending: pending,
       css: styleEl ? styleEl.textContent : '',
       tagged: document.querySelectorAll('[' + TONE_ATTR + ']').length,
-      coverage: coverage()
+      coverage: coverage(),
+      /* what the palette currently resolves to, and whether the master rule is
+         live at all — the two facts a "why is my text still white" report needs
+         (1.1.0) */
+      ink: paletteInk(), masterInk: masterInk, accent: accentOn,
+      siteOverride: siteInk[host] || '', defRule: defaultRule()
     }),
     /* colour-sweep surface: the same code paths the panel buttons hit */
     scope: (v) => { scopeSel.value = v; onScopeChange(); },

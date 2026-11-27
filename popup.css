@@ -1,5 +1,5 @@
 body {
-  width: 260px; margin: 0; padding: 12px;
+  width: 284px; margin: 0; padding: 12px;
   background: #0b0f17; color: #d7dee8;
   font: 13px/1.4 system-ui, "Segoe UI", Roboto, sans-serif;
 }
@@ -28,3 +28,23 @@ button.force {
 
 #btn-force { margin-top: 6px; }
 #btn-force:disabled { display: none; }
+
+/* ── palette (1.1.0) ───────────────────────────────────────────────────── */
+.palette {
+  margin: 12px 0 10px; padding: 9px 10px 6px;
+  border: 1px solid #1c2434; border-radius: 8px; background: #101725;
+}
+.row { display: flex; align-items: center; gap: 7px; margin-bottom: 7px; font-size: 12px; }
+.row input[type="checkbox"] { accent-color: #2f9eae; margin: 0; }
+.row .lbl { color: #8b96a8; flex: 1 1 auto; }
+.row.ink { gap: 6px; }
+.row input[type="color"] {
+  width: 30px; height: 22px; padding: 0; border: 1px solid #263046;
+  border-radius: 4px; background: #0b0f17; cursor: pointer;
+}
+.row code { color: #2f9eae; font-size: 11px; }
+.mini {
+  padding: 3px 7px; font-size: 11px; cursor: pointer; border-radius: 5px;
+  border: 1px solid #263046; background: #182136; color: #d7dee8;
+}
+.mini:hover { border-color: #2f9eae; color: #2f9eae; }

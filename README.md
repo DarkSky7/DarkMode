@@ -1,22 +1,79 @@
 # DarkMode — darkener for the resistant cases
 
-A browser extension that **does nothing until asked**. On sites that shrug off
-ordinary dark-mode extensions (inline styles, canvases, `color-scheme: light`
-lock-in — e.g. **foxglove.dev**), click the toolbar icon and the page goes dark
-via CSS filter inversion, which flips what polite per-element theming can't
-reach. Optionally *remember* a site so it auto-darkens on future visits.
+A browser extension that darkens by **CSS filter inversion** — the flip that
+reaches inline styles, canvases and `color-scheme: light` lock-ins that polite
+per-element darkening cannot — and then paints the resulting white/grey ink in a
+**palette colour you choose** (cyan by default).
 
-## Behavior contract
+It also carries a per-site palette override and a switch for every automatic
+decision, because the extension no longer waits to be asked.
 
-- **Inert by default.** No site is touched until the user asks. Installed and
-  enabled ≠ anything happens.
-- **Ask = click the toolbar icon** → "Darken this page" (one-shot, this tab).
-  The popup shows the live state; the button toggles back.
-- **Remember = check "Always dark on \<host\>"** in the popup. The host is
-  stored in `storage.sync`; future visits auto-darken at `document_start`
-  (no light flash). Uncheck to forget. Nothing is ever auto-added — only the
-  user includes sites.
-- Per-visit toggles never persist. Reload a non-remembered page → light again.
+## Behavior contract (changed in 1.1.0 — read this, it is not what 1.0.x said)
+
+- **Dark by default.** Every page is darkened unless you say otherwise. This
+  *replaces* the old "does nothing until asked" promise, at the owner's explicit
+  request (2026-11-27): *"automatically going Dark Mode to previously unseen
+  sites by default (violating our claim that it does nothing until asked)"*.
+  `dmAuto: false` restores the old behaviour exactly.
+- **A site counts as dark** if it was remembered (`darkHosts`), or if auto-dark
+  is on and the site is not in `dmLightHosts`. A remembered site always wins over
+  an exclusion; the DENY list (Gmail) wins over both.
+- **A page that is already dark is handed back.** `toneNatural()` reads
+  `color-scheme` (including `light dark` under a dark OS preference), then the
+  page's own background, then its ink, and the guards back out at
+  DOMContentLoaded and again after `load`. Darkening a dark page would fake the
+  light look it came from.
+- **One click, two meanings, labelled both ways.** With auto-dark on, the popup's
+  checkbox reads *"Keep &lt;host&gt; light"* and writes `dmLightHosts`. With it off,
+  the old *"Always dark on &lt;host&gt;"* meaning is back.
+- **Per-visit toggles never persist**; a by-hand toggle also freezes every
+  automatic decision for that tab.
+- **Pieces are exempt from the invert** (`img / video / canvas / iframe / embed /
+  object / svg image` are inverted back to natural colour), and a frame is judged
+  by its own pixels (1.0.41).
+
+## The palette (1.1.0)
+
+Three storage keys, and their shape is the request:
+
+- `dmInk` — the **master palette** ink. One colour for every site. Default
+  `#2f9eae` (hue 188, 6.24:1 on near-black — unmistakably cyan without the
+  eye-burning 15.8:1 of `#00ffff`).
+- `dmAccent` — is the master palette applied at all (default **true**).
+- `dmSiteInk` — `{ host: '#rrggbb' }`, the **per-site override**. Only a host
+  that has an entry is ever written to, so a site override exists only if you
+  made one. The key is the hostname with `www.` stripped (`w3.org`, not
+  `www.w3.org`).
+
+Precedence, lowest to highest: **master palette → site palette → your own saved
+tone/selector rules.** The master rule is prepended to the rule list so a saved
+rule always wins, and it is emitted first in the stylesheet.
+
+What gets tinted: text whose ink is neutral and light (or neutral grey, or vivid
+enough to read as glare — the predicates are `inkIsLight`, `inkIsNeutral`,
+`inkIsGlare`), measured in *rendered* space. Ink on a **bright or saturated
+plate** keeps its colour — cyan on a blue button is not an improvement — except
+on a white plate, which the invert renders dark, so it is tinted. Labels on a
+dimmed fill are offered the palette ink as a candidate and the 4.5:1 contrast
+score decides.
+
+Rules are scoped to `:root:is(.cr-dark,.cr-frame-dark)`, so "revert to light"
+really does return the page to its own colours instead of leaving cyan ink on a
+white page.
+
+Measured 2026-11-27 on the installed 1.1.0 build (Chromium 140):
+
+| page | auto-dark | accented elements | light-ink coverage | near-white pixels |
+|---|---|---|---|---|
+| lite.cnn.com | yes | 112 | 112 / 112, 0 left | 0.1% on, **88.3% off** |
+| www.w3.org | yes | 149 | 66 / 66, 0 left | 17 left, all labels on dimmed fills where cyan fails 4.5:1 |
+| example.com | **reverted** | 0 | — | `color-scheme: light dark` + dark OS preference ⇒ already dark |
+| afuncan.com | **reverted** | 0 | — | body `rgb(8,6,24)` ⇒ already dark |
+| www.rfc-editor.org | **reverted** | 0 | — | `color-scheme: dark` ⇒ already dark |
+
+`accent` pixels are the exact cyan: 6.3% of the viewport on lite.cnn.com with the
+engine on versus 0.0% with the class removed — the pixel proof, not a DOM claim.
+
 
 ## Engine
 
@@ -122,6 +179,37 @@ wins over a narrower rule saved before it.
   (`node --check content.js popup.js background.js`).
 - On every edit bump BOTH `manifest.json` "version" and the in-script
   `VERSION` constants so `about:debugging` / the popup show an honest build.
+
+### Measuring the palette on a live page (1.1.0)
+
+`scripts/probe-darkmode-live.mjs` opens a **new** tab (never the user's), reads
+what the installed build actually did, then also evaluates inside the
+extension's **isolated world** — where `window.__dmTuner` exists. It reports
+written vs rendered colour separately, the tag count, `coverage()`, and any
+uncaught error from either world.
+
+    node scripts/probe-darkmode-live.mjs --port 9222 --url https://lite.cnn.com/
+    node scripts/probe-darkmode-live.mjs --port 9222 --url URL --set '{"dmInk":"#d98c00"}'
+    node scripts/test-plate-guard.mjs  --port 9222 --url https://lite.cnn.com/
+    node scripts/shot-darkmode-pair.mjs --port 9222 --url https://lite.cnn.com/
+    python <browser-extension-authoring>/scripts/pngstat.py on.png off.png --accent 47,158,174
+
+Four traps these scripts exist to avoid, all of which produced false results in
+one session:
+
+- **`window.__dmDarkMode`/`__dmTuner` is null in the page world** — the content
+  script is an isolated world, so a page-realm probe "proving" the hook is
+  missing proves nothing. Ask the isolated context by name.
+- **`data-dm-ver` is written before the sweep**, so a page that threw inside
+  `applyRules` looks loaded-but-un-tinted with no error visible. Capture
+  `Runtime.exceptionThrown`.
+- **A single `\d` inside the probe's template literal becomes `[/d+/]`**, and a
+  residual audit then returns an empty list while seventeen elements are plain
+  white. Parse with `[0-9.]` classes instead.
+- **Plant BLACK ink to test the accent.** The page is inverted: site `#fff` ink
+  renders black, so a synthetic white-on-white case "correctly" gets no accent
+  and the test passes while testing nothing.
+
 - Test target #1: **foxglove.dev** (resists the stock Dark Mode extension).
   Load unpacked, click the icon on a foxglove.dev page, then tick "Always dark".
 

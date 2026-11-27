@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "DarkMode \u2014 resistant-site darkener",
-  "version": "1.0.41",
-  "description": "Does nothing until asked. Click the toolbar icon on a site that resists dark mode to darken it; optionally remember the site so it auto-darkens on future visits.",
+  "version": "1.1.0",
+  "description": "Darkens every site by default and tints white/grey text with your palette colour. Turn a site \u2014 or auto-dark \u2014 off from the toolbar.",
   "permissions": [
     "storage",
     "activeTab",

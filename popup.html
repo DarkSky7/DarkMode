@@ -18,14 +18,36 @@
 
   <label class="remember">
     <input type="checkbox" id="remember">
-    <span>Always dark on <b id="host2"></b></span>
+    <span id="remember-label">Always dark on <b id="host2"></b></span>
   </label>
-  <div id="remember-note" class="note" hidden>Will auto-darken on future visits. Uncheck to stop.</div>
+  <div id="remember-note" class="note" hidden></div>
+
+  <section class="palette">
+    <label class="row"><input type="checkbox" id="auto">
+      <span>Auto-dark sites I have not seen</span></label>
+
+    <label class="row"><input type="checkbox" id="accent">
+      <span>Tint white/grey text</span></label>
+
+    <div class="row ink">
+      <span class="lbl">Master ink</span>
+      <input type="color" id="ink" value="#2f9eae">
+      <code id="inkhex">#2f9eae</code>
+    </div>
+
+    <div class="row ink">
+      <span class="lbl">This site only</span>
+      <input type="color" id="siteink" value="#2f9eae">
+      <button id="site-save" class="mini">Save</button>
+      <button id="site-clear" class="mini" hidden>Clear</button>
+    </div>
+    <div id="site-note" class="note" hidden></div>
+  </section>
 
   <button id="btn-tune" class="big">🎯 Tune in place…</button>
   <div id="tune-note" class="note" hidden>Point at an element, pick a class, tune the colour, save it for this host.</div>
 
-  <footer>Does nothing until asked.</footer>
+  <footer>Auto-dark is ON until you turn it off. Sites you switch off stay light.</footer>
   <script src="popup.js"></script>
 </body>
 </html>
