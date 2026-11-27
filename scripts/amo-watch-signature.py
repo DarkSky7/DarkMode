@@ -40,7 +40,12 @@ REPO = "DarkSky7/DarkMode"
 WORKFLOW = "sync-signed.yml"
 BASE = "https://addons.mozilla.org/api/v5"
 STATE = r"F:\tmp\msi\darkmode\state"
-AMO_ENV = os.environ.get("AMO_ENV") or r"C:\Users\Mike2\.ssh\amo-transcript-first-guard.env"
+# The DarkMode key lives in amo-darkmode.env. This default used to point at
+# amo-transcript-first-guard.env, which holds a DIFFERENT account's key, so every
+# check came back HTTP 401 and the job printed an error every 2 hours instead of
+# watching anything. (Measured 2026-11-30: amo-release.py auth -> 200 on the same
+# key from amo-darkmode.env.)
+AMO_ENV = os.environ.get("AMO_ENV") or r"C:\Users\Mike2\.ssh\amo-darkmode.env"
 GH_PAT = os.environ.get("GH_PAT") or r"C:\Users\Mike2\.ssh\DarkMode_PAT"
 
 
@@ -115,7 +120,20 @@ def main():
     try:
         d = amo_version(ver, jwt)
     except urllib.error.HTTPError as e:
-        print("DarkMode %s: AMO check failed HTTP %s" % (ver, e.code))
+        # a version that has not been uploaded yet is the NORMAL case, not an
+        # error: return 0 silently rather than printing on every tick
+        if e.code == 404:
+            return 0
+        # A rejected key IS worth saying out loud — the watch is blind until it is
+        # fixed — but once per version, not every tick.
+        os.makedirs(STATE, exist_ok=True)
+        marker = os.path.join(STATE, "amo-authfail-%s" % ver)
+        if os.path.isfile(marker):
+            return 0
+        open(marker, "w").write("%s http=%s\n" % (time.strftime("%Y-%m-%dT%H:%M:%S"), e.code))
+        print("DarkMode %s: AMO rejected the credentials (HTTP %s) from %s — the "
+              "signature watch cannot see anything until that key is fixed."
+              % (ver, e.code, AMO_ENV))
         return 0
     except Exception as exc:                        # noqa: BLE001 - network flake is not an alert
         print("DarkMode %s: AMO check failed (%s)" % (ver, exc.__class__.__name__))
