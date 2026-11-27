@@ -77,6 +77,15 @@
        is otherwise back to its own colours — measured on Google's SERP, which is
        natively dark and therefore triggers apply-then-revert on every load. */
     try { if (window.__dmUnpaint) window.__dmUnpaint(); } catch (e) {}
+    /* A dark-island marker is a PARITY claim (1.2.0): leaving it behind after
+       the page filter is gone would make tuner.js skip ink work on a page that
+       is no longer inverted. The `data-cr-bgphoto` marker is harmless without
+       `html.cr-dark` (its CSS is gated on the class), but the island marker is
+       read by our own sweeps, so it must go. */
+    try {
+      const isl = document.querySelectorAll('[data-dm-island]');
+      for (let i = 0; i < isl.length; i++) isl[i].removeAttribute('data-dm-island');
+    } catch (e) {}
     try { if (window.__dmResweep) window.__dmResweep(); } catch (e) {}
   }
   function isDark() { return document.documentElement.classList.contains(OWN_KEY); }
@@ -865,10 +874,110 @@
        own question instead of re-deriving it. */
     try { window.__crShowsText = showsText; } catch (e) {}
     try { window.__crIsVectorArt = isVectorArt; } catch (e) {}
+    try { window.__crInkLum = inkLumOf; } catch (e) {}
+
+    /* ── A PLATE'S TONE IS A MEASUREMENT, NOT A GUESS (1.2.0) ─────────────────
+       Mike, 2026-11-30: newtonpaisley.com's article footer "looks inverted to
+       lite and the text is white thus low contrast". Measured: the footer is a
+       natively DARK region — #0f8979 paint under an OPAQUE 2000x1200 tumbled-
+       fabric background-image (meanL 0.305, coverage 1.0) with #f2f2f2 ink
+       (contrast 3.85:1) — sitting inside a light page. Two independent refusals
+       kept it in the wrong state:
+
+         * `showsText` vetoes every restore of an element carrying visible text.
+           That is right for a PHOTO behind text (the Ambient Weather case above),
+           and wrong for a plate that was dark to begin with, where the page
+           filter is precisely what destroys the contrast.
+         * tuner.js capped the element's background-COLOR, which this image
+           covers completely — so it dimmed a fill nobody can see and scored the
+           label ink against it (L 0.159), writing near-BLACK ink that the invert
+           then rendered near-WHITE (measured #f4f7fa) on the inverted, now
+           LIGHT, plate: 1.31:1 in place of the site's own 3.85:1.
+
+       The fix is to publish the plate's measured tone so the ink engine stops
+       guessing, and to keep a dark plate dark when its ink was designed for it.
+       The ink guard is what keeps this safe: restoring an element whose ink is
+       DARK still loses (that is the Ambient Weather failure), so a restore here
+       requires light ink — a region legitimately designed light-on-dark. */
+    const BGMEAN_ATTR = 'data-cr-bgmean';   // measured mean luminance of the plate
+    const BGCOV_ATTR = 'data-cr-bgcov';     // opaque fraction of the 16x16 sample
+    const ISLAND_MAXL = 0.40;               // plate dark enough to have been designed dark
+    const ISLAND_INK_MINL = 0.55;           // ...with ink light enough to have been designed for it
+
+    /* Proper relative luminance (the shared `lum()` above is a bare average,
+       fine for the normaliser's thresholds, too coarse to decide AA contrast). */
+    function relLum(c) {
+      const f = function (v) { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
+      return 0.2126 * f(c[0]) + 0.7152 * f(c[1]) + 0.0722 * f(c[2]);
+    }
+    /* parseColor() lives inside startSurfaceNormaliser(), a DIFFERENT closure —
+       calling it from here threw ReferenceError, which the helper's own try/catch
+       turned into "ink luminance 0" and the island silently never engaged. Local
+       parser, same shape: [r, g, b, a]. */
+    function parseCssColour(s) {
+      const m = String(s).match(/rgba?\(([\d.]+),\s*([\d.]+),\s*([\d.]+)(?:,\s*([\d.]+))?/);
+      if (!m) return null;
+      return [+m[1], +m[2], +m[3], m[4] === undefined ? 1 : +m[4]];
+    }
+
+    /* OUR OWN PAINT MUST NOT BE MISTAKEN FOR THE SITE'S INK (1.2.0). The label
+       pass writes inline `!important` colour and the tone pass tags elements for
+       a stylesheet rule, so by the time this decision runs `getComputedStyle`
+       may be reporting a colour WE chose — measured: the first attempt read our
+       own rgb(11,8,5) on the newtonpaisley footer and concluded "dark ink", so
+       the island never engaged. Strip our inline style and our tone tag for one
+       synchronous read, then put both back byte-for-byte. */
+    function authoredInk(t) {
+      const savedStyle = t.getAttribute('style');
+      const savedTone = t.getAttribute('data-dm-tone');
+      const ours = t.hasAttribute('data-dm-label') || savedTone !== null ||
+        (savedStyle && /-webkit-text-fill-color/.test(savedStyle));
+      if (!ours) {
+        try { return parseCssColour(getComputedStyle(t).color); } catch (e) { return null; }
+      }
+      let c = null;
+      try {
+        t.removeAttribute('style');
+        t.removeAttribute('data-dm-tone');
+        c = parseCssColour(getComputedStyle(t).color);
+      } catch (e) { c = null; }
+      try {
+        if (savedStyle !== null) t.setAttribute('style', savedStyle);
+        if (savedTone !== null) t.setAttribute('data-dm-tone', savedTone);
+      } catch (e) {}
+      return c;
+    }
+
+    /* The ink this region was DESIGNED with. `color` inherits, so the dominant
+       text owner answers the question directly; the brightest owner is taken
+       because one dark caption must not veto the "light-on-dark" reading. */
+    function inkLumOf(el) {
+      let best = 0, n = 0;
+      try {
+        const kids = el.querySelectorAll('*');
+        for (let i = 0; i < kids.length && i < 400; i++) {
+          const t = kids[i];
+          if (t.children.length || !String(t.textContent || '').trim()) continue;
+          const tcs = getComputedStyle(t);
+          if (tcs.visibility === 'hidden' || tcs.display === 'none') continue;
+          const c = authoredInk(t);
+          if (!c || c[3] < 0.2) continue;
+          const l = relLum(c);
+          if (l > best) best = l;
+          if (++n >= 12) break;
+        }
+        if (!n) {
+          const c = authoredInk(el);
+          if (c && c[3] >= 0.2) best = relLum(c);
+        }
+      } catch (e) { return 0; }
+      return best;
+    }
 
     function pass() {
       if (!isDark()) return;
       const els = document.querySelectorAll('*');
+      let started = 0;
       for (let i = 0; i < els.length; i++) {
         const el = els[i];
         if (MEDIA_TAGS_BG.test(el.tagName)) continue;
@@ -882,22 +991,66 @@
            backgrounds are now allowed when the sample looks photographic —
            see `photo` in imageColourfulness. */
         if (box.width * box.height < 2500) continue;        // sprites/icons
-        const cs = getComputedStyle(el);
-        const bi = cs.backgroundImage;
+        let cs, bi;
+        try { cs = getComputedStyle(el); bi = cs.backgroundImage; } catch (e) { continue; }
         if (!bi || bi === 'none' || bi.indexOf('url(') === -1) continue;
         if (/gradient/.test(bi)) continue;                  // not individually restorable
         if (isVectorArt(bi)) continue;                      // gauge/dial/logo: let it invert
-        if (showsText(el)) continue;                        // VISIBLE text stays in the filtered world
-        const repeats = cs.backgroundRepeat !== 'no-repeat';
-        const autoSize = cs.backgroundSize === 'auto';
-        if (repeats && autoSize) continue;                  // decorative tile/plate
         /* A nested marker would be inverted twice and come back inverted. */
         if (el.parentElement && el.parentElement.closest('[data-cr-bgphoto="1"]')) continue;
         const m = /url\(["']?([^"')]+)["']?\)/.exec(bi);
         if (!m) continue;
-        (function (node, url) {
+        /* MEASURE EVERY PLATE, INCLUDING THE ONES WE WILL NOT RESTORE (1.2.0).
+           tuner.js decides its ink against the element's background-COLOR, which
+           is a fill nobody can see whenever an opaque image covers the box. That
+           is how the newtonpaisley footer got near-WHITE ink scored against an
+           invisible L 0.159 paint. Publishing the measured tone (cached per URL,
+           capped per pass) is what lets the ink engine stop guessing. */
+        if (!el.hasAttribute(BGMEAN_ATTR)) {
+          if (started >= 60) continue;
+          started++;
+        }
+        const hadText = showsText(el);
+        const repeats = cs.backgroundRepeat !== 'no-repeat';
+        const autoSize = cs.backgroundSize === 'auto';
+        (function (node, url, hadText, repeats, autoSize, box) {
           imageColourfulness(url).then(function (st) {
             if (!st) return;                                // unmeasurable -> warn, stay inverted
+            try {
+              node.setAttribute(BGMEAN_ATTR, st.meanL.toFixed(3));
+              node.setAttribute(BGCOV_ATTR, st.coverage.toFixed(3));
+            } catch (e) { return; }
+            if (node.dataset.crBgphoto) return;
+            if (!isDark()) return;
+            try { if (getComputedStyle(node).backgroundImage === 'none') return; } catch (e) { return; }
+
+            /* (1) DARK ISLAND (1.2.0). A plate that was DARK, carrying ink that
+               was designed for it, is the one case where the page filter is what
+               DESTROYS contrast rather than what fixes it: inverting it turns a
+               dark footer into a light band under light ink. Keeping it native
+               also restores the site's own ink/plate contrast, which the label
+               engine had overwritten with the wrong polarity. The light-ink
+               requirement is what keeps the Ambient Weather lesson intact — a
+               restore whose ink is dark still loses. */
+            if (hadText && st.coverage >= 0.9 && st.meanL <= ISLAND_MAXL) {
+              const inkL = inkLumOf(node);
+              if (inkL >= ISLAND_INK_MINL) {
+                node.dataset.crBgphoto = '1';
+                node.dataset.dmIsland = '1';
+                /* The marker changes INVERT PARITY for the whole subtree, so any
+                   ink or fill already painted inside it is now wrong — and the
+                   label pass writes inline !important, which a re-sweep alone
+                   does not remove. Undo the inline paint first, then re-decide. */
+                try { if (window.__dmUnpaint) window.__dmUnpaint(); } catch (e) {}
+                try { if (window.__dmResweep) window.__dmResweep(); } catch (e) {}
+                return;
+              }
+            }
+
+            /* (2) the original photo / wordmark rules, unchanged — and they still
+               refuse an element that carries visible text. */
+            if (hadText) return;
+            if (repeats && autoSize) return;                // decorative tile/plate
             /* Three ways to earn a restore, and the sat-only rule that used to
                be the whole test still covers the large case it was written for:
                  photo      colourful raster of any size  (product shots)
@@ -907,11 +1060,9 @@
                UI furniture and inverting it is what the page filter is for. */
             const big = box.width * box.height >= 10000;
             if (!st.photo && !st.lightArt && !(big && st.sat >= 0.12)) return;
-            if (!isDark()) return;
-            if (getComputedStyle(node).backgroundImage === 'none') return;
             node.dataset.crBgphoto = '1';
           });
-        })(el, m[1]);
+        })(el, m[1], hadText, repeats, autoSize, box);
       }
     }
 

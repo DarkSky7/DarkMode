@@ -1399,10 +1399,23 @@
       bi = cs.backgroundImage || ''; rect = el.getBoundingClientRect();
     } catch (e) { return false; }
     if (rect.width * rect.height < SURFACE_MIN_AREA) return false;
+    /* A DARK ISLAND NEEDS NOTHING FROM THIS PASS (1.2.0). Its filter is already
+       cancelled by content.js, so the fills and ink inside it are the site's own
+       and correct; capping or relabelling them here is what produced the
+       low-contrast footer in the first place. */
+    try { if (el.closest('[data-dm-island="1"]')) return false; } catch (e) {}
     const par = invertDepth(el) % 2;
     const asShown = function (c) { return par ? [255 - c[0], 255 - c[1], 255 - c[2]] : [c[0], c[1], c[2]]; };
 
-    const flat = bg && bg[3] > 0.5 ? asShown(bg) : null;
+    /* A FLAT FILL BEHIND AN OPAQUE IMAGE IS NOT THE PLATE (1.2.0). When a
+       background-image covers the box, background-color is invisible: capping it
+       dims nothing, and the label pass then scores ink against a colour no pixel
+       shows. Treat the element as an image panel instead — content.js publishes
+       the measured coverage so this is a read, not a guess. */
+    const bgMean = el.getAttribute('data-cr-bgmean');
+    const bgCov = Number(el.getAttribute('data-cr-bgcov'));
+    const imagePlate = bgMean !== null && bgMean !== '' && isFinite(bgCov) && bgCov >= 0.9;
+    const flat = (!imagePlate && bg && bg[3] > 0.5) ? asShown(bg) : null;
     /* GRADIENTS ARE PAINTS TOO (1.0.34). The cap only understood
        background-color, so a surface whose colour arrives as a
        linear-gradient(...) was invisible to it -- which is how a bright red sale
@@ -1532,6 +1545,22 @@
      two getComputedStyle reads per label and nothing else. */
   function applyLabelFix(el, seenFill) {
     if (!el || !seenFill) return 0;
+    /* A DARK ISLAND IS ALREADY NATIVE (1.2.0). content.js cancels the page
+       filter for a natively-dark plate, so the ink inside it is the ink the site
+       chose and needs no correction — writing one would be a second guess on top
+       of a pair that already works. */
+    try { if (el.closest('[data-dm-island="1"]')) return 0; } catch (e) {}
+    /* AN IMAGE PLATE IS NOT A COLOUR (1.2.0). `seenFill` is the background-COLOR
+       we capped; when an opaque background-image covers the box that colour is
+       not on screen at all. Scoring ink against it is exactly how the
+       newtonpaisley footer got near-BLACK ink — which the page invert renders
+       near-WHITE — on an inverted (hence LIGHT) fabric plate: measured 1.31:1,
+       against the site's own 3.85:1. The invert flips ink and plate TOGETHER, so
+       an authored pair keeps its contrast; where the plate cannot be measured,
+       the only safe edit is none. content.js publishes the measurement. */
+    const gm = el.getAttribute('data-cr-bgmean');
+    const gc = Number(el.getAttribute('data-cr-bgcov'));
+    if (gm !== null && gm !== '' && isFinite(gc) && gc >= 0.9) return 0;
     let written = 0;
     const kids = el.querySelectorAll('*');
     for (let i = 0; i < kids.length && i < 60; i++) {
@@ -1855,6 +1884,9 @@
     for (let i = 0; i < all.length; i++) {
       const el = all[i];
       if (el.id === ROOT_ID || !ownsText(el)) continue;
+      /* A dark-island plate is native (1.2.0): its ink is the site's own choice
+         for its own plate, so the accent must not touch it. */
+      try { if (el.closest('[data-dm-island="1"]')) continue; } catch (e) {}
       const base = rendersOf(el);
       if (!base) continue;
       /* Last rule wins, like the CSS cascade: rules are appended in the order

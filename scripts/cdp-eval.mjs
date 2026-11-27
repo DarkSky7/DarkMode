@@ -81,12 +81,21 @@ async function portFromProfile() {
   throw new Error('chrome did not open a debugging port');
 }
 
-async function pageTarget(port) {
+async function pageTarget(port, wantUrl) {
   for (let i = 0; i < 150; i++) {
     try {
       const r = await fetch('http://127.0.0.1:' + port + '/json/list');
       const list = await r.json();
-      const page = list.find((t) => t.type === 'page' && t.webSocketDebuggerUrl);
+      const pages = list.filter((t) => t.type === 'page' && t.webSocketDebuggerUrl);
+      // Chrome can briefly expose an about:blank page target ahead of the one it
+      // was launched with, so NEVER take pages[0] blindly — prefer an exact URL
+      // match, then any real page, and only then a blank one.
+      const norm = (u) => String(u || '').replace(/\/+$/, '');
+      const page =
+        pages.find((t) => norm(t.url) === norm(wantUrl)) ||
+        pages.find((t) => t.url && t.url !== 'about:blank') ||
+        pages.find((t) => norm(t.url) === 'about:blank' || t.url === 'about:blank') ||
+        pages[0];
       if (page) return page;
     } catch (e) { /* not up yet */ }
     await sleep(100);
@@ -135,7 +144,7 @@ async function evalIn(cdp, expression, awaitPromise = true) {
 let exitCode = 0;
 try {
   const port = await portFromProfile();
-  const target = await pageTarget(port);
+  const target = await pageTarget(port, url);
   const cdp = await connect(target.webSocketDebuggerUrl);
 
   if (cold) {
