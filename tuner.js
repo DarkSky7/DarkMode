@@ -319,6 +319,146 @@
       .join('\n');
   }
 
+  /* ── THE PALETTE OVER AN IMAGE PLATE (1.3.0) ──────────────────────────────
+
+     Mike: *"in the most general way possible, can you try to make the white text
+     over that footer image cyan as well?"*
+
+     1.2.0 left image-plate ink entirely alone, and for a good reason: an image
+     has no colour readable from CSS, so any write is a guess. But a plate does
+     not have to STAY unmeasurable. content.js publishes its measured mean
+     luminance (data-cr-bgmean), and a black inset scrim lowers that by a known
+     factor — alpha blending is linear in sRGB VALUES, so the composite is
+     exactly computable. That turns "unknown plate" into "plate of known
+     luminance", which is all the ink engine ever needed.
+
+     So the rule is: solve the SMALLEST scrim at which a palette-derived ink
+     clears 4.5:1, and if the scrim would crush the image, BRIGHTEN THE PALETTE
+     (same hue, blended toward white) rather than darken the plate further. The
+     palette keeps its identity; only its lightness adapts, and only as much as
+     the contrast target demands. This is the general form of "make the white text
+     cyan": nothing here is specific to one site, one class name or one image.
+
+     Writes are ordinary rememberBase/!important ones, so __dmUnpaint() undoes
+     them with everything else. */
+  const ISLAND_TARGET = 4.5;      // WCAG AA for body text
+  const ISLAND_FLOOR = 3.0;       // accepted only if 4.5 is unreachable
+  const ISLAND_SCRIM_MAX = 0.65;  // never hide more than 65% of the image
+  const ISLAND_INK_ATTR = 'data-dm-isl-ink';
+
+  /** Blend `c` toward white by t (0..1). Hue is preserved, lightness rises. */
+  function lightenTo(c, t) {
+    return [c[0] + (255 - c[0]) * t, c[1] + (255 - c[1]) * t, c[2] + (255 - c[2]) * t];
+  }
+  /** The plate as a grey at measured mean luminance `meanL` under scrim `a`. */
+  function plateUnderScrim(meanL, a) {
+    const v = Math.pow(Math.max(0, meanL), 1 / 2.2) * (1 - a) * 255;
+    return [v, v, v];
+  }
+  /** Smallest scrim alpha that brings `ink` to `target` against the plate. */
+  function solveScrim(meanL, ink, target) {
+    if (contrastOf(ink, plateUnderScrim(meanL, 0)) >= target) return 0;
+    let lo = 0, hi = 1, best = null;
+    for (let i = 0; i < 24; i++) {
+      const mid = (lo + hi) / 2;
+      if (contrastOf(ink, plateUnderScrim(meanL, mid)) >= target) { best = mid; hi = mid; }
+      else lo = mid;
+    }
+    return best;
+  }
+
+  /** Paint the palette over every dark-island image plate we have measured. */
+  function islandInkPass() {
+    let islands;
+    try { islands = document.querySelectorAll('[data-dm-island="1"]'); } catch (e) { return 0; }
+    if (!islands.length) return 0;
+    const pal = parseRGB(paletteInk());
+    let written = 0;
+    for (let i = 0; i < islands.length && i < 40; i++) {
+      const isl = islands[i];
+
+      /* Accent off, or no usable palette: put the island back the way the site
+         had it. Idempotent, so an accent toggle needs no other bookkeeping. */
+      if (!accentOn || !pal) {
+        if (isl.hasAttribute(ISLAND_INK_ATTR)) {
+          restoreBase(isl, 'box-shadow', CAP_SH_BASE);
+          const labs = isl.querySelectorAll('[' + LABEL_ATTR + ']');
+          for (let k = 0; k < labs.length; k++) {
+            restoreBase(labs[k], 'color', LABEL_BASE_COLOR);
+            restoreBase(labs[k], '-webkit-text-fill-color', LABEL_BASE_FILL);
+            restoreBase(labs[k], 'fill', LABEL_BASE_SVG);
+            labs[k].removeAttribute(LABEL_ATTR);
+          }
+          isl.removeAttribute(ISLAND_INK_ATTR);
+        }
+        continue;
+      }
+
+      const meanL = Number(isl.getAttribute('data-cr-bgmean'));
+      if (!isFinite(meanL) || meanL <= 0) continue;
+
+      /* Candidates: the palette itself, then progressively brighter tints of it.
+         First one that fits inside the scrim cap wins, so the palette is only
+         lightened when that is what avoids crushing the image. */
+      const cands = [pal, lightenTo(pal, 0.25), lightenTo(pal, 0.5), lightenTo(pal, 0.72)];
+      let ink = null, a = null;
+      for (let c = 0; c < cands.length; c++) {
+        const s = solveScrim(meanL, cands[c], ISLAND_TARGET);
+        if (s !== null && s <= ISLAND_SCRIM_MAX) { ink = cands[c]; a = s; break; }
+      }
+      if (!ink) {
+        /* 4.5 is out of reach within the cap. Use the cap, take whichever ink is
+           best there, and be honest about the number we actually achieved. */
+        a = ISLAND_SCRIM_MAX;
+        let best = -1;
+        for (let c = 0; c < cands.length; c++) {
+          const cc = contrastOf(cands[c], plateUnderScrim(meanL, a));
+          if (cc > best) { best = cc; ink = cands[c]; }
+        }
+        if (best < ISLAND_FLOOR) {
+          /* no palette tint can hold this plate up; leave the site's own ink and
+             paint no scrim, which keeps the native contrast 1.2.0 established */
+          continue;
+        }
+      }
+
+      /* Scrim: black in NATIVE space. An island has its page filter cancelled
+         (page invert + our counter-invert = even parity), so this is not the
+         inverted-context polarity problem solveOverlay() deals with. */
+      if (a > 0.002) {
+        try {
+          rememberBase(isl, 'box-shadow', CAP_SH_BASE);
+          isl.style.setProperty('box-shadow',
+            'inset 0 0 0 9999px rgba(0,0,0,' + a.toFixed(3) + ')', 'important');
+        } catch (e) { continue; }
+      } else {
+        restoreBase(isl, 'box-shadow', CAP_SH_BASE);
+      }
+      isl.setAttribute(ISLAND_INK_ATTR, '1');
+
+      const kids = isl.querySelectorAll('*');
+      for (let k = 0; k < kids.length && k < 80; k++) {
+        const t = kids[k];
+        if (!ownsText(t)) continue;
+        let tc;
+        try { tc = parseRGB(getComputedStyle(t).webkitTextFillColor || getComputedStyle(t).color); } catch (e) { continue; }
+        if (!tc || tc[3] < 0.05) continue;
+        if (t.hasAttribute(LABEL_ATTR)) { written++; continue; }   // already ours
+        try {
+          rememberBase(t, 'color', LABEL_BASE_COLOR);
+          rememberBase(t, '-webkit-text-fill-color', LABEL_BASE_FILL);
+          rememberBase(t, 'fill', LABEL_BASE_SVG);
+          t.style.setProperty('color', rgbCss(ink), 'important');
+          t.style.setProperty('-webkit-text-fill-color', rgbCss(ink), 'important');
+          t.style.setProperty('fill', rgbCss(ink), 'important');
+          t.setAttribute(LABEL_ATTR, '1');
+          written++;
+        } catch (e) {}
+      }
+    }
+    return written;
+  }
+
   function applyRules() {
     if (!styleEl) {
       styleEl = document.createElement('style');
@@ -353,6 +493,10 @@
        the right colour, and on a page we just backed out of they are writing
        inline paint that nothing will remove (1.1.1). */
     if (fillsAllowed() && engineOn()) capSurfaces();   // brightness ceiling for fills (1.0.32)
+    /* AFTER the cap sweep, not before: islandInkPass owns the ink on image
+       plates, and capSurfaces/applyLabelFix are the passes that must not touch
+       it (they both early-return on an island). */
+    try { islandInkPass(); } catch (e) {}
     ensureObserve();
   }
 

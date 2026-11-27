@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "DarkMode — resistant-site darkener",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Darkens every site by default and tints white/grey text with your palette colour. Keeps natively-dark regions dark, and never repaints text on a background it cannot measure. Turn a site — or auto-dark — off from the toolbar.",
   "permissions": [
     "storage",

@@ -57,8 +57,53 @@
   const ENGINE = Object.prototype.hasOwnProperty.call(REPAINT, HOST) ? 'repaint' : 'filter';
   const OWN_KEY = ENGINE === 'repaint' ? KEY_REPAINT : KEY;
 
+  /* A PAGE THAT REWRITES className CANNOT BE ALLOWED TO DISARM THE ENGINE
+     (1.3.0). Wikipedia was measured adding `client-nojs` at parse time and
+     replacing the WHOLE class string with `client-js …` at 9 ms; our marker was
+     added at 5 ms and was gone at 9 ms, so the page rendered light with no error
+     anywhere — and 1.1.1 behaved identically, which is why this looked like "the
+     already-dark guard misfires". It was never the guard: the marker was wiped.
+     Many CMS themes and skins do exactly this. So the class is re-asserted
+     whenever it disappears while the engine is still WANTED, and `revert()` is
+     the only thing that stops it. */
+  let engineWanted = false;
+  let classGuard = null;
+  let reasserts = 0;
+  function assertEngineClass() {
+    if (!engineWanted) return;
+    const de = document.documentElement;
+    if (!de) return;
+    try {
+      if (!de.classList.contains(OWN_KEY)) {
+        const before = de.className;
+        de.classList.add(OWN_KEY);
+        reasserts++;
+        if (reasserts <= 3) {
+          try {
+            console.warn('[DarkMode] page replaced className, engine class re-asserted:',
+              before.slice(0, 60) + '…');
+          } catch (_) {}
+        }
+        /* the filter just came back: media and background photos were computed
+           against an un-inverted tree, so let them re-decide */
+        try { if (window.__dmResweep) window.__dmResweep(); } catch (e) {}
+      }
+    } catch (e) {}
+  }
+  function startClassGuard() {
+    if (classGuard || typeof MutationObserver === 'undefined') return;
+    const de = document.documentElement;
+    if (!de) return;
+    try {
+      classGuard = new MutationObserver(function () { assertEngineClass(); });
+      classGuard.observe(de, { attributes: true, attributeFilter: ['class'] });
+    } catch (e) { classGuard = null; }
+  }
+
   function apply() {
+    engineWanted = true;
     document.documentElement.classList.add(OWN_KEY);
+    startClassGuard();
     if (ENGINE === 'repaint') startSurfaceRepaint();
     else startBgPhotoFix();
     startShadowMediaFix();    // media inside shadow roots: page CSS cannot reach it
@@ -68,6 +113,7 @@
     try { if (window.__dmResweep) window.__dmResweep(); } catch (e) {}
   }
   function revert() {
+    engineWanted = false;
     document.documentElement.classList.remove(OWN_KEY);
     // an engine change must not leave the other engine's class behind
     document.documentElement.classList.remove(ENGINE === 'repaint' ? KEY : KEY_REPAINT);
