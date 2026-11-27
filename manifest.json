@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "DarkMode \u2014 resistant-site darkener",
-  "version": "1.1.0",
-  "description": "Darkens every site by default and tints white/grey text with your palette colour. Turn a site \u2014 or auto-dark \u2014 off from the toolbar.",
+  "name": "DarkMode — resistant-site darkener",
+  "version": "1.1.1",
+  "description": "Darkens every site by default and tints white/grey text with your palette colour. Turn a site — or auto-dark — off from the toolbar.",
   "permissions": [
     "storage",
     "activeTab",

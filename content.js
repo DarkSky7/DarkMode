@@ -9,7 +9,7 @@
    content.css and do nothing until the class exists. */
 (function () {
   'use strict';
-  const VERSION = '1.1.0';
+  const VERSION = '1.1.1';
   const HOST = location.hostname.replace(/^www\./, '');
 
   if (window.top !== window) return; // frames: parent handles the page
@@ -71,6 +71,12 @@
     document.documentElement.classList.remove(OWN_KEY);
     // an engine change must not leave the other engine's class behind
     document.documentElement.classList.remove(ENGINE === 'repaint' ? KEY : KEY_REPAINT);
+    /* Undo the INLINE paint before re-sweeping (1.1.1). The cap/dimmer/label
+       passes write `!important` inline values that the class does not control, so
+       a revert without this leaves inverted images and dimmed fills on a page that
+       is otherwise back to its own colours — measured on Google's SERP, which is
+       natively dark and therefore triggers apply-then-revert on every load. */
+    try { if (window.__dmUnpaint) window.__dmUnpaint(); } catch (e) {}
     try { if (window.__dmResweep) window.__dmResweep(); } catch (e) {}
   }
   function isDark() { return document.documentElement.classList.contains(OWN_KEY); }

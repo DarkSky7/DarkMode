@@ -130,6 +130,87 @@
     return hexOr(siteInk[host], masterInk);
   }
 
+  /* ── UNDOING OUR OWN INLINE PAINT (1.1.1) ─────────────────────────────────
+     The fill cap, the photo dimmer and the label fix write inline
+     `!important` values. Those survive `revert()` — the engine class only stops
+     the CSS, and inline styles are not CSS we gate. That was invisible while a
+     darkening was always a deliberate click; with auto-dark ON, the engine
+     applies at document_start and BACKS OUT ~150 ms later on a natively dark
+     page (Google's SERP, `body{background:rgb(34,36,42)}`), leaving 47 thumbnails
+     carrying `filter: invert(1) brightness(0.82) !important` on a DARK page —
+     i.e. every image in the top image-pack rendered as a colour negative.
+
+     So every write records the AUTHORED inline value it replaced, and
+     `__dmUnpaint()` puts them back. Record `el.style.getPropertyValue()`, never
+     `getComputedStyle()`: the computed value includes our own content.css
+     `invert(1)` for images, so restoring it would re-create the negative. */
+  function rememberBase(el, prop, attr) {
+    if (el.hasAttribute(attr)) return;
+    let v = '';
+    try { v = el.style.getPropertyValue(prop) || ''; } catch (e) {}
+    el.setAttribute(attr, v);
+  }
+  function restoreBase(el, prop, attr) {
+    if (!el.hasAttribute(attr)) return;
+    const v = el.getAttribute(attr);
+    try {
+      if (v) el.style.setProperty(prop, v, 'important');
+      else el.style.removeProperty(prop);
+    } catch (e) {}
+    el.removeAttribute(attr);
+  }
+
+  const CAP_BG_BASE = 'data-dm-capbg';
+  const CAP_SH_BASE = 'data-dm-capsh';
+  const LABEL_ATTR = 'data-dm-label';
+  const LABEL_BASE_COLOR = 'data-dm-labc';
+  const LABEL_BASE_FILL = 'data-dm-labf';
+  const LABEL_BASE_SVG = 'data-dm-labs';
+  const IMG_BASE = 'data-dm-imgbase';
+
+  /** Is the engine's class on this document (top document or a darkened frame)? */
+  function engineOn() {
+    const de = document.documentElement;
+    if (!de) return false;
+    return de.classList.contains('cr-dark') || de.classList.contains('cr-frame-dark')
+      || de.classList.contains('cr-repaint');
+  }
+
+  /** Remove every inline declaration and marker this file wrote. */
+  function unpaint() {
+    let n = 0;
+    try {
+      const imgs = document.querySelectorAll('[' + IMG_ATTR + ']');
+      for (let i = 0; i < imgs.length; i++) {
+        restoreBase(imgs[i], 'filter', IMG_BASE);
+        imgs[i].removeAttribute(IMG_ATTR);
+        n++;
+      }
+      const caps = document.querySelectorAll('[' + SURFACE_ATTR + ']');
+      for (let i = 0; i < caps.length; i++) {
+        restoreBase(caps[i], 'background-color', CAP_BG_BASE);
+        restoreBase(caps[i], 'box-shadow', CAP_SH_BASE);
+        caps[i].removeAttribute(SURFACE_ATTR);
+        caps[i].removeAttribute(SURFACE_CAPT_ATTR);
+        n++;
+      }
+      const labels = document.querySelectorAll('[' + LABEL_ATTR + ']');
+      for (let i = 0; i < labels.length; i++) {
+        restoreBase(labels[i], 'color', LABEL_BASE_COLOR);
+        restoreBase(labels[i], '-webkit-text-fill-color', LABEL_BASE_FILL);
+        restoreBase(labels[i], 'fill', LABEL_BASE_SVG);
+        labels[i].removeAttribute(LABEL_ATTR);
+      }
+      /* The tone/frame tags paint nothing on their own (their CSS is gated), but
+         a stale tag makes the next sweep's bookkeeping lie, so clear them. */
+      const tones = document.querySelectorAll('[' + TONE_ATTR + ']');
+      for (let i = 0; i < tones.length; i++) tones[i].removeAttribute(TONE_ATTR);
+      const finks = document.querySelectorAll('[' + FINK_ATTR + ']');
+      for (let i = 0; i < finks.length; i++) finks[i].removeAttribute(FINK_ATTR);
+    } catch (e) { return -1; }
+    return n;
+  }
+
   async function persist() {
     const data = await sget({ tuneRulesByHost: {} });
     const map = data.tuneRulesByHost || {};
@@ -267,7 +348,11 @@
       document.documentElement.setAttribute('data-dm-ver', mv);
     } catch (e) {}
     sweepTone();
-    if (fillsAllowed()) capSurfaces();   // brightness ceiling for fills (1.0.32)
+    /* The fill cap and the photo dimmer only make sense while WE are the ones
+       painting the darkness — on a light page they dim surfaces that are already
+       the right colour, and on a page we just backed out of they are writing
+       inline paint that nothing will remove (1.1.1). */
+    if (fillsAllowed() && engineOn()) capSurfaces();   // brightness ceiling for fills (1.0.32)
     ensureObserve();
   }
 
@@ -1375,7 +1460,10 @@
       const a = solveOverlay(rawStops, cap, par);
       if (a <= 0.002) return false;            // already at or under the ceiling
       const OL = par ? 255 : 0;                // white overlay inverts to a dark fill
-      try { el.style.setProperty('box-shadow', 'inset 0 0 0 9999px rgba(' + OL + ',' + OL + ',' + OL + ',' + a.toFixed(3) + ')', 'important'); }
+      try {
+        rememberBase(el, 'box-shadow', CAP_SH_BASE);
+        el.style.setProperty('box-shadow', 'inset 0 0 0 9999px rgba(' + OL + ',' + OL + ',' + OL + ',' + a.toFixed(3) + ')', 'important');
+      }
       catch (e) { return false; }
       const ref = stops.reduce(function (p, c) { return lum(c) > lum(p) ? c : p; }, stops[0]);
       /* seen = seenOrig * (1 - a) for a white overlay under an inversion, which is
@@ -1386,7 +1474,10 @@
       const k = dimToLum(flat, cap);
       target = flat.map(function (v) { return v * k; });
       const write = par ? target.map(function (v) { return 255 - v; }) : target;
-      try { el.style.setProperty('background-color', rgbCss(write), 'important'); } catch (e) { return false; }
+      try {
+        rememberBase(el, 'background-color', CAP_BG_BASE);
+        el.style.setProperty('background-color', rgbCss(write), 'important');
+      } catch (e) { return false; }
     } else {
       /* PROMO STRIPS ARE IMAGE PANELS (2026-11-16). The red "11.11 Sale" strip is
          not a painted fill at all: it is span.group-top-notice-container with
@@ -1407,7 +1498,10 @@
       const promo = aspect >= 4 && rect.width * rect.height >= 15000;
       const a = promo ? PHOTO_OVERLAY_PROMO : PHOTO_OVERLAY;
       const OL = par ? 255 : 0;
-      try { el.style.setProperty('box-shadow', 'inset 0 0 0 9999px rgba(' + OL + ',' + OL + ',' + OL + ',' + a + ')', 'important'); }
+      try {
+        rememberBase(el, 'box-shadow', CAP_SH_BASE);
+        el.style.setProperty('box-shadow', 'inset 0 0 0 9999px rgba(' + OL + ',' + OL + ',' + OL + ',' + a + ')', 'important');
+      }
       catch (e) { return false; }
       /* A blind image panel has no colour we can read, so the reference for label
          scoring is the BRIGHTEST the panel can be after the trim: every channel is
@@ -1472,9 +1566,13 @@
       if (Math.max(cDark, cLight) <= cur + 0.01 && bestC <= cur + 0.01) continue;
       const want = tp ? [255 - bestInk[0], 255 - bestInk[1], 255 - bestInk[2]] : bestInk;
       try {
+        rememberBase(t, 'color', LABEL_BASE_COLOR);
+        rememberBase(t, '-webkit-text-fill-color', LABEL_BASE_FILL);
+        rememberBase(t, 'fill', LABEL_BASE_SVG);
         t.style.setProperty('color', rgbCss(want), 'important');
         t.style.setProperty('-webkit-text-fill-color', rgbCss(want), 'important');
         t.style.setProperty('fill', rgbCss(want), 'important');
+        t.setAttribute(LABEL_ATTR, '1');
         written++;
       } catch (e) {}
     }
@@ -1521,6 +1619,7 @@
       try { f = getComputedStyle(img).filter || 'none'; } catch (e) { continue; }
       const next = (f === 'none' ? '' : f + ' ') + 'brightness(' + IMG_DIM + ')';
       try {
+        rememberBase(img, 'filter', IMG_BASE);
         img.style.setProperty('filter', next, 'important');
         img.setAttribute(IMG_ATTR, '1');
         n++;
@@ -1824,7 +1923,7 @@
       const roots = pendingRoots;
       pendingRoots = [];
       for (let i = 0; i < roots.length; i++) sweepTone(roots[i]);
-      if (fillsAllowed()) capSurfaces();   // late-rendered fills (the Checkout button renders late)
+      if (fillsAllowed() && engineOn()) capSurfaces();   // late-rendered fills (the Checkout button renders late)
     }, 120);
   }
 
@@ -2174,6 +2273,11 @@
      rules and their tags are both produced here, so "darken this page" has to
      re-run the sweep or the ink stays white until the next load. */
   window.__dmResweep = function () { try { applyRules(); } catch (e) {} };
+
+  /* …and this when the engine class comes OFF (1.1.1): inline paint written by
+     the cap/photo/label passes is not gated by the class, so leaving it behind
+     is what made Google's image thumbnails render as negatives on a dark page. */
+  window.__dmUnpaint = function () { return unpaint(); };
 
   // Harness hook: lets a test drive the picker without a real click.
   window.__dmTuner = {
