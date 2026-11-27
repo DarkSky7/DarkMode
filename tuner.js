@@ -1894,6 +1894,13 @@
         continue;
       }
       if (!inkNeedsAccent(base)) continue;
+      /* Elements the MASTER palette deliberately declines — ink on a bright or
+         saturated plate — must not be counted as "still light", or the panel
+         nags about work it decided not to do (measured on python.org: 18 such
+         labels, all on the yellow Donate button and the light-blue nav). A user
+         rule that DID tag such an element still counts, because that was asked
+         for explicitly. */
+      if (accentOn && !el.hasAttribute(TONE_ATTR) && plateLoud(el)) continue;
       total++;
       if (el.hasAttribute(TONE_ATTR)) { done++; if (isSvgText(el)) svg++; }
     }

@@ -13,6 +13,11 @@ header { display: flex; align-items: baseline; justify-content: space-between; m
 }
 .big:hover { border-color: #ffb000; color: #ffb000; }
 .big.on { background: #b57f00; color: #0b0f17; border-color: #ffb000; }
+/* A disabled primary button must LOOK disabled: without this it rendered
+   identically to an available one on a browser-internal page (measured
+   2026-11-27). */
+.big:disabled { opacity: .45; cursor: default; border-color: #263046; color: #5b6472; }
+.big:disabled:hover { border-color: #263046; color: #5b6472; }
 .hint { color: #5b6472; font-size: 11px; margin: 8px 2px; }
 .remember { display: flex; gap: 8px; align-items: flex-start; margin-top: 4px; cursor: pointer; }
 .remember input { margin-top: 2px; accent-color: #ffb000; }

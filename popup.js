@@ -156,7 +156,7 @@ async function readSettings() {
 async function refresh() {
   tab = await currentTab();
   host = hostOf(tab);
-  document.getElementById('host').textContent = host ? 'on ' + host : 'no web page';
+  document.getElementById('host').textContent = host ? 'on ' + host : 'No web page';
   await readSettings();
   renderPalette();
   renderRemember();

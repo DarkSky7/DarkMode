@@ -66,13 +66,20 @@ Measured 2026-11-27 on the installed 1.1.0 build (Chromium 140):
 | page | auto-dark | accented elements | light-ink coverage | near-white pixels |
 |---|---|---|---|---|
 | lite.cnn.com | yes | 112 | 112 / 112, 0 left | 0.1% on, **88.3% off** |
-| www.w3.org | yes | 149 | 66 / 66, 0 left | 17 left, all labels on dimmed fills where cyan fails 4.5:1 |
+| www.w3.org | yes | 149 | 66 / 66, 0 left | 17 labels stay pale: on mid-tone fills cyan scores 1.7:1, pale scores 4.5:1 |
+| www.python.org | yes | 265 | 171 / 171, 0 left | 44 labels stay pale, same contrast rule (Donate button, light-blue nav) |
 | example.com | **reverted** | 0 | — | `color-scheme: light dark` + dark OS preference ⇒ already dark |
 | afuncan.com | **reverted** | 0 | — | body `rgb(8,6,24)` ⇒ already dark |
 | www.rfc-editor.org | **reverted** | 0 | — | `color-scheme: dark` ⇒ already dark |
 
 `accent` pixels are the exact cyan: 6.3% of the viewport on lite.cnn.com with the
 engine on versus 0.0% with the class removed — the pixel proof, not a DOM claim.
+
+**"0 left" is not the same as "no white on screen".** `coverage()` counts text
+owners the master palette TAGS; the labels above are tagged and then overridden by
+an inline contrast fix, which is the correct outcome on a fill where cyan cannot
+hold 4.5:1. Read the `stillWhite`/`residual` numbers from the probe next to the
+coverage number, never instead of them.
 
 
 ## Engine
